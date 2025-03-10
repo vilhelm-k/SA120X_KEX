@@ -1,4 +1,4 @@
-ClientID,StartTime,EndTime,TaskType,DriverID,RequiresWoman,HasPet
+ClientID,StartTime,EndTime,TaskType,CaregiverID,RequiresWoman,HasPet
 1661,2025-03-05T07:30:00+01:00,2025-03-05T07:50:00+01:00,Hemtjänst,1146,True,False
 679,2025-03-05T07:30:00+01:00,2025-03-05T08:00:00+01:00,Hemtjänst,33,False,False
 1569,2025-03-05T07:30:00+01:00,2025-03-05T08:15:00+01:00,Hemtjänst,1180,False,False
