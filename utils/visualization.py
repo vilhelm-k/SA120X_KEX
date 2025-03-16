@@ -303,7 +303,6 @@ def visualize_home_care_schedule(
     # Add text box for statistics
     props = dict(boxstyle="round", facecolor="white", alpha=0.7)
     ax.text(0.02, 0.98, stats_text, transform=ax.transAxes, fontsize=10, verticalalignment="top", bbox=props)
-    return fig
 
 
 # Example usage:

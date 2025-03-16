@@ -15,15 +15,17 @@ def calculate_big_M(tasks, time_matrices):
     return M
 
 
-def build_home_care_model_dfbased(
+def build_model(
     caregivers: pd.DataFrame,  # ID,ModeOfTransport,Attributes,start_minutes,end_minutes,StartLocation,EndLocation,RequiresBreak
     tasks: pd.DataFrame,  # ID,ClientID,start_minutes,end_minutes,duration_minutes,TaskType,PlannedCaregiverID
     clients: pd.DataFrame,  # ID,Requirements
     drive_time_matrix: pd.DataFrame,  # Drive time matrix from client col to client row. Uses client ID as indexes. Index 0 is the HQ.
-    M,
+    walk_time_matrix: pd.DataFrame,
+    bicycle_time_matrix: pd.DataFrame,
 ):
     K = caregivers.index.tolist()
     V = tasks.index.tolist()
+    M = calculate_big_M(tasks, [drive_time_matrix, walk_time_matrix, bicycle_time_matrix])
     model = gp.Model("HomeCare")
 
     # For each caregiver, gather only the patients that caregiver k can serve,
