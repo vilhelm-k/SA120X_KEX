@@ -4,55 +4,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
 
-def calculate_routes(model, x, t):
-    """
-    Extract the routes from the solved Gurobi model and return as a dictionary.
-
-    Parameters:
-    - model: Solved Gurobi model
-    - x: Dictionary of x variables (caregiver routes)
-
-    Returns:
-    - routes: Dictionary of routes for each caregiver
-    """
-    if model.Status != 2:  # Check if model is solved optimally
-        print(f"Model not optimally solved. Status: {model.Status}")
-
-    routes = {}
-
-    for k, i, j in x:
-        if x[k, i, j].X > 0.5:
-            routes[k] = []
-            routes[k].append((i, j))
-    return routes
-
-
-def calculate_arrival_times(model, x, t):
-    """
-    Extract the arrival times from the solved Gurobi model and return as a dictionary.
-
-    Parameters:
-    - model: Solved Gurobi model
-    - x: Dictionary of x variables (caregiver routes)
-    - t: Dictionary of t variables (arrival times)
-
-    Returns:
-    - arrival_times: Dictionary of arrival times for each caregiver
-    """
-    if model.Status != 2:  # Check if model is solved optimally
-        print(f"Model not optimally solved. Status: {model.Status}")
-
-    routes = calculate_routes(model, x, t)
-
-    arrival_times = {}
-
-    for k in routes:
-        all_visited_nodes = set([i for i, j in routes[k]] + [j for i, j in routes[k]])
-        for node in all_visited_nodes:
-            arrival_times[k, node] = t[k, node].X
-    return arrival_times
-
-
+### Need to completely redo the following...
 def visualize_home_care_schedule(
     model, x, t, caregivers, tasks, drive_time_matrix, walk_time_matrix=None, bike_time_matrix=None
 ):

@@ -1,32 +1,18 @@
-import numpy as np
 import pandas as pd
+import numpy as np
 import gurobipy as gp
 from gurobipy import GRB
 
 
-def calculate_big_M(caregivers, tasks, drive_time_matrix):
-    """Calculate the smallest sufficient big M value for the model."""
-
-    # 1. Get the planning horizon (time window)
-    earliest_start = min(caregivers["start_minutes"].min(), tasks["start_minutes"].min())
-    latest_end = max(caregivers["end_minutes"].max(), tasks["end_minutes"].max())
-    time_horizon = latest_end - earliest_start
-
-    # 2. Get maximum travel time between any locations
-    max_travel_time = drive_time_matrix.max().max()
-
-    # 3. Get maximum service duration
-    max_service_time = tasks["duration_minutes"].max()
-
-    # 4. Calculate big M with a small buffer (10%)
-    big_M = (time_horizon + max_travel_time + max_service_time) * 1.1
-
-    print(f"Calculated big M: {big_M}")
-    print(f"- Time horizon: {time_horizon}")
-    print(f"- Max travel time: {max_travel_time}")
-    print(f"- Max service time: {max_service_time}")
-
-    return big_M
+def calculate_big_M(tasks, time_matrices):
+    """
+    Calculates the big M for the models.
+    """
+    earliest_start = tasks["start_minutes"].min()
+    latest_end = tasks["end_minutes"].max()
+    max_travel_time = max([time_matrix.max().max() for time_matrix in time_matrices])
+    M = 1.1 * (latest_end - earliest_start + 2 * max_travel_time)
+    return M
 
 
 def build_home_care_model_dfbased(
