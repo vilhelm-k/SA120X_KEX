@@ -15,6 +15,52 @@ def calculate_big_M(tasks, time_matrices):
     return M
 
 
+def calculate_travel_times(caregivers, tasks, drive_time_matrix, walk_time_matrix, bicycle_time_matrix):
+    K = caregivers.index.tolist()
+    V = tasks.index.tolist()
+
+    c = {}
+    for k in K:
+        mode_of_transport = caregivers.loc[k, "ModeOfTransport"]
+        # Make into switch statement
+        if mode_of_transport == "car":
+            time_matrix = drive_time_matrix
+        elif mode_of_transport == "pedestrian":
+            time_matrix = walk_time_matrix
+        elif mode_of_transport == "bicycle":
+            time_matrix = bicycle_time_matrix
+        for i in V + ["start"]:
+            for j in V + ["end"]:
+                if i != j and not (i == "start" and j == "end"):
+                    # Calculate travel time based on locations
+                    if i == "start":
+                        # From start location to task
+                        travel_time = (
+                            0
+                            if caregivers.loc[k, "StartLocation"] == "Home"
+                            else time_matrix.loc[0, tasks.loc[j, "ClientID"]]
+                        )
+                    elif j == "end":
+                        # From task to end location
+                        travel_time = (
+                            0
+                            if caregivers.loc[k, "EndLocation"] == "Home"
+                            else time_matrix.loc[tasks.loc[i, "ClientID"], 0]
+                        )
+                    else:
+                        # From task to task
+                        travel_time = time_matrix.loc[tasks.loc[i, "ClientID"], tasks.loc[j, "ClientID"]]
+                    c[k, i, j] = travel_time
+    return c
+
+
+def calculate_service_times(tasks):
+    s = {}
+    for i in tasks.index.tolist():
+        s[i] = tasks.loc[i, "duration_minutes"]
+    return s
+
+
 def build_model(
     caregivers: pd.DataFrame,  # ID,ModeOfTransport,Attributes,start_minutes,end_minutes,StartLocation,EndLocation,RequiresBreak
     tasks: pd.DataFrame,  # ID,ClientID,start_minutes,end_minutes,duration_minutes,TaskType,PlannedCaregiverID
@@ -27,6 +73,8 @@ def build_model(
     V = tasks.index.tolist()
     M = calculate_big_M(tasks, [drive_time_matrix, walk_time_matrix, bicycle_time_matrix])
     model = gp.Model("HomeCare")
+    c = calculate_travel_times(caregivers, tasks, drive_time_matrix, walk_time_matrix, bicycle_time_matrix)
+    s = calculate_service_times(tasks)
 
     # For each caregiver, gather only the patients that caregiver k can serve,
     # then define the augmented node set (start, qualified patients, end).
@@ -112,31 +160,48 @@ def build_model(
         for i in V + ["start"]:
             for j in V + ["end"]:
                 if i != j and not (i == "start" and j == "end"):
-                    # Calculate travel time based on locations
-                    if i == "start":
-                        # From start location to task
-                        travel_time = (
-                            0
-                            if caregivers.loc[k, "StartLocation"] == "Home"
-                            else drive_time_matrix.loc[0, tasks.loc[j, "ClientID"]]
-                        )
-                        service_time = 0
-                    elif j == "end":
-                        # From task to end location
-                        travel_time = (
-                            0
-                            if caregivers.loc[k, "EndLocation"] == "Home"
-                            else drive_time_matrix.loc[tasks.loc[i, "ClientID"], 0]
-                        )
-                        service_time = tasks.loc[i, "duration_minutes"]
-                    else:
-                        # From task to task
-                        travel_time = drive_time_matrix.loc[tasks.loc[i, "ClientID"], tasks.loc[j, "ClientID"]]
-                        service_time = tasks.loc[i, "duration_minutes"]
-
-                    # Add the constraint
+                    service_time = 0 if i == "start" else s[i]
+                    travel_time = c[k, i, j]
                     model.addConstr(
                         t[k, j] >= t[k, i] + travel_time + service_time - M * (1 - x[k, i, j]),
                         name=f"TimeLink[{k},{i}->{j}]",
                     )
     return model, x, t
+
+
+# TODO: Add unused caregivers
+def extract_routes(model, x):
+
+    if model.Status != 2:  # Check if model is solved optimally
+        print(f"Model not optimally solved. Status: {model.Status}")
+
+    routes = {}
+    js = []
+    for k, _, j in x:
+        if k not in routes:
+            routes[k] = []
+        if j not in js:
+            js.append(j)
+
+    for k in routes:
+        i = "start"
+        while i != "end":
+            for j in js:
+                if i != j and not (i == "start" and j == "end") and x[k, i, j].X > 0.5:
+                    routes[k].append((i, j))
+                    i = j
+                    break
+            if i == "start":
+                break
+
+    return routes
+
+
+def extract_arrivals(model, x, t):
+    routes = extract_routes(model, x)
+    arrivals = {}
+    for k in routes:
+        arrivals[k, "start"] = t[k, "start"].X
+        for _, j in routes[k]:
+            arrivals[k, j] = t[k, j].X
+    return arrivals
