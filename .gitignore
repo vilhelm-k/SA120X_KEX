@@ -18,7 +18,6 @@ gurobi.log
 
 # Project specific
 data/saved_solutions/
-data/raw/matrix_duration_matrix_*.csv
 
 # OS specific
 .DS_Store
