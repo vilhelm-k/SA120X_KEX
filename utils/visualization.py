@@ -1,5 +1,7 @@
 import matplotlib.pyplot as plt
+import matplotlib.colors as mcolors
 import matplotlib.patches as patches
+import matplotlib.gridspec as gridspec
 import numpy as np
 import pandas as pd
 from utils.metrics import calculate_metrics
@@ -29,7 +31,7 @@ def visualize_schedule(model):
     # Create schedule data for visualization
     schedule_data = []
 
-    for k in routes:
+    for k in model.K:
         if not routes[k]:  # Skip empty routes
             continue
 
@@ -96,9 +98,8 @@ def visualize_schedule(model):
     # Create figure and axis
     fig, ax = plt.subplots(figsize=(15, fig_height))
 
-    # Get y positions for each caregiver
-    caregivers_list = sorted(df["Caregiver"].unique())
-    y_positions = {cg: i for i, cg in enumerate(caregivers_list)}
+    # Get y positions for each caregiver in reverse order
+    y_positions = {cg: len(model.K) - 1 - i for i, cg in enumerate(model.K)}
 
     # Calculate time range
     min_time = df["Start"].min()
@@ -118,7 +119,7 @@ def visualize_schedule(model):
         # Add text labels for tasks
         if "Task" in row["Activity"]:
             # Determine what text to display based on width
-            if width >= 25:
+            if width >= 40:
                 # If box is wide enough, show task info
                 task_id = row["Activity"].split(" ")[1]
                 label = f"{task_id}\n({int(row['Index'])})"
@@ -165,21 +166,28 @@ def visualize_schedule(model):
     return fig
 
 
-import matplotlib.pyplot as plt
-import numpy as np
-
-
-def visualize_metrics(model):
+def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10)):
     """
     Create visualizations of the metrics from the model solution.
-    This function creates multiple plots showing different aspects of the solution.
 
     Parameters:
     - model: A solved optimization model instance
+    - display_mode: String, controls which figures to display
+        - 'dashboard': Only display the dashboard (default)
+        - 'individual': Only display the individual figures
+        - 'all': Display both dashboard and individual figures
+        - 'none': Don't display any figures, just return them
+    - dashboard_figsize: Size of the dashboard figure
 
     Returns:
-    - A tuple of matplotlib figures
+    - If display_mode is 'dashboard': The dashboard figure
+    - If display_mode is 'individual': A tuple of individual figures (fig1, fig2, fig3, fig4, fig5)
+    - If display_mode is 'all' or 'none': A tuple of all figures (fig1, fig2, fig3, fig4, fig5, dashboard_fig)
     """
+    # Turn off interactive mode to prevent automatic display
+    was_interactive = plt.isinteractive()
+    if was_interactive:
+        plt.ioff()
     metrics = calculate_metrics(model)
     caregiver_metrics = metrics["caregiver_metrics"]
     aggregate_metrics = metrics["aggregate_metrics"]
@@ -382,125 +390,70 @@ def visualize_metrics(model):
     # Add gridlines for readability
     ax5.grid(axis="y", linestyle="--", alpha=0.7)
 
-    plt.tight_layout()
-    return (fig1, fig2, fig3, fig4, fig5)
-
-
-def create_summary_dashboard(model, figsize=(18, 10)):
-    """
-    Create a comprehensive dashboard combining key metrics and visualizations.
-
-    Parameters:
-    - model: A solved optimization model instance
-    - figsize: Size of the dashboard figure
-
-    Returns:
-    - A matplotlib figure
-    """
-    import matplotlib.gridspec as gridspec
-
-    # Calculate metrics
-    metrics = calculate_metrics(model)
-    caregiver_metrics = metrics["caregiver_metrics"]
-    aggregate_metrics = metrics["aggregate_metrics"]
-
-    # Only include caregivers with assigned tasks
-    active_caregivers = {k: v for k, v in caregiver_metrics.items() if v["number_of_tasks"] > 0}
-
-    if not active_caregivers:
-        print("No active caregivers to visualize.")
-        return None
-
-    # Get list of caregivers and use consistent indices
-    caregivers = list(active_caregivers.keys())
-    index = np.arange(len(caregivers))  # Use numeric indices for x-axis positions
-
     # Create the dashboard figure
-    fig = plt.figure(figsize=figsize)
-    gs = gridspec.GridSpec(2, 3, figure=fig, height_ratios=[1, 1])
+    dashboard_fig = plt.figure(figsize=dashboard_figsize)
+    gs = gridspec.GridSpec(2, 3, figure=dashboard_fig)
 
-    # 1. Time allocation bar chart
-    ax1 = fig.add_subplot(gs[0, 0:2])
+    # We'll create the plots directly on the dashboard figure
+    # 1. Time allocation bar chart (top left)
+    dash_ax1 = dashboard_fig.add_subplot(gs[0, 0])
+    dash_ax1.bar(index, service_times, label="Service", color="skyblue")
+    dash_ax1.bar(index, travel_times, bottom=service_bottom, label="Travel", color="orange")
+    dash_ax1.bar(index, waiting_times, bottom=service_travel_bottom, label="Waiting", color="lightgray")
+    dash_ax1.set_xticks(index)
+    dash_ax1.set_xticklabels(caregivers)
+    dash_ax1.set_xlabel("Caregiver")
+    dash_ax1.set_ylabel("Time (minutes)")
+    dash_ax1.set_title("Time Allocation by Caregiver")
+    dash_ax1.legend()
 
-    service_times = [active_caregivers[k]["service_time"] for k in caregivers]
-    travel_times = [active_caregivers[k]["travel_time"] for k in caregivers]
-    waiting_times = [active_caregivers[k]["waiting_time"] for k in caregivers]
+    # 2. Pie chart (top right)
+    dash_ax2 = dashboard_fig.add_subplot(gs[0, 2])
+    dash_ax2.pie(sizes, labels=labels, colors=colors, autopct="%1.1f%%", startangle=90)
+    dash_ax2.axis("equal")
+    dash_ax2.set_title("Overall Time Allocation")
 
-    # Use index positions for consistent x-axis
-    ax1.bar(index, service_times, label="Service", color="skyblue")
-    service_bottom = service_times
-    ax1.bar(index, travel_times, bottom=service_bottom, label="Travel", color="orange")
-    service_travel_bottom = [s + t for s, t in zip(service_times, travel_times)]
-    ax1.bar(index, waiting_times, bottom=service_travel_bottom, label="Waiting", color="lightgray")
+    # 3. Utilization bar chart (middle left)
+    dash_ax3 = dashboard_fig.add_subplot(gs[1, 0])
+    dash_ax3.bar(index, utilizations, color="skyblue")
+    dash_ax3.set_xticks(index)
+    dash_ax3.set_xticklabels(caregivers)
+    dash_ax3.axhline(y=avg_util, linestyle="--", color="red", label=f"Avg: {avg_util:.1f}%")
+    dash_ax3.set_xlabel("Caregiver")
+    dash_ax3.set_ylabel("Utilization (%)")
+    dash_ax3.set_title("Caregiver Utilization")
+    dash_ax3.set_ylim(0, 100)
+    dash_ax3.legend()
 
-    # Set x-ticks to show actual caregiver IDs
-    ax1.set_xticks(index)
-    ax1.set_xticklabels(caregivers)
+    # 4. Tasks per caregiver (middle right)
+    dash_ax4 = dashboard_fig.add_subplot(gs[1, 1])
+    dash_ax4.bar(index, tasks_per_caregiver, color="skyblue")
+    dash_ax4.set_xticks(index)
+    dash_ax4.set_xticklabels(caregivers)
+    dash_ax4.axhline(y=avg_tasks, linestyle="--", color="red", label=f"Avg: {avg_tasks:.1f}")
+    dash_ax4.set_xlabel("Caregiver")
+    dash_ax4.set_ylabel("Number of Tasks")
+    dash_ax4.set_title("Tasks Assigned per Caregiver")
+    dash_ax4.legend()
 
-    ax1.set_xlabel("Caregiver")
-    ax1.set_ylabel("Time (minutes)")
-    ax1.set_title("Time Allocation by Caregiver")
-    ax1.legend()
+    # 5. Time proportions (bottom left)
+    dash_ax5 = dashboard_fig.add_subplot(gs[0, 1])
+    dash_ax5.bar(index, proportions_service, bar_width, label="Service", color="skyblue")
+    dash_ax5.bar(index, proportions_travel, bar_width, bottom=proportions_service, label="Travel", color="orange")
+    dash_ax5.bar(
+        index, proportions_waiting, bar_width, bottom=bottom_service_travel, label="Waiting", color="lightgray"
+    )
+    dash_ax5.set_ylabel("Percentage (%)")
+    dash_ax5.set_xlabel("Caregiver")
+    dash_ax5.set_title("Time Allocation Proportions")
+    dash_ax5.set_ylim(0, 100)
+    dash_ax5.set_xticks(index)
+    dash_ax5.set_xticklabels(caregivers)
+    dash_ax5.legend()
 
-    # 2. Pie chart
-    ax2 = fig.add_subplot(gs[0, 2])
-
-    sizes = [
-        aggregate_metrics["total"]["service_time"],
-        aggregate_metrics["total"]["travel_time"],
-        aggregate_metrics["total"]["waiting_time"],
-    ]
-    labels = ["Service", "Travel", "Waiting"]
-    colors = ["skyblue", "orange", "lightgray"]
-
-    ax2.pie(sizes, labels=labels, colors=colors, autopct="%1.1f%%", startangle=90)
-    ax2.axis("equal")
-    ax2.set_title("Overall Time Allocation")
-
-    # 3. Utilization bar chart
-    ax3 = fig.add_subplot(gs[1, 0])
-
-    utilizations = [active_caregivers[k]["utilization"] for k in caregivers]
-
-    # Use index positions for consistent x-axis
-    ax3.bar(index, utilizations, color="skyblue")
-
-    # Set x-ticks to show actual caregiver IDs
-    ax3.set_xticks(index)
-    ax3.set_xticklabels(caregivers)
-
-    avg_util = aggregate_metrics["average"]["utilization"]
-    ax3.axhline(y=avg_util, linestyle="--", color="red", label=f"Avg: {avg_util:.1f}%")
-
-    ax3.set_xlabel("Caregiver")
-    ax3.set_ylabel("Utilization (%)")
-    ax3.set_title("Caregiver Utilization")
-    ax3.set_ylim(0, 100)
-    ax3.legend()
-
-    # 4. Tasks per caregiver
-    ax4 = fig.add_subplot(gs[1, 1])
-
-    tasks_per_caregiver = [active_caregivers[k]["number_of_tasks"] for k in caregivers]
-
-    # Use index positions for consistent x-axis
-    ax4.bar(index, tasks_per_caregiver, color="skyblue")
-
-    # Set x-ticks to show actual caregiver IDs
-    ax4.set_xticks(index)
-    ax4.set_xticklabels(caregivers)
-
-    avg_tasks = aggregate_metrics["average"]["tasks_per_caregiver"]
-    ax4.axhline(y=avg_tasks, linestyle="--", color="red", label=f"Avg: {avg_tasks:.1f}")
-
-    ax4.set_xlabel("Caregiver")
-    ax4.set_ylabel("Number of Tasks")
-    ax4.set_title("Tasks Assigned per Caregiver")
-    ax4.legend()
-
-    # 5. Summary statistics text box
-    ax5 = fig.add_subplot(gs[1, 2])
-    ax5.axis("off")
+    # 6. Summary statistics text box (bottom right)
+    dash_ax6 = dashboard_fig.add_subplot(gs[1, 2])
+    dash_ax6.axis("off")
 
     agg = aggregate_metrics
 
@@ -526,9 +479,233 @@ def create_summary_dashboard(model, figsize=(18, 10)):
 
     # Add text box
     props = dict(boxstyle="round", facecolor="white", alpha=0.9)
-    ax5.text(
-        0.05, 0.95, "\n".join(summary_text), transform=ax5.transAxes, fontsize=11, verticalalignment="top", bbox=props
+    dash_ax6.text(
+        0.05,
+        0.95,
+        "\n".join(summary_text),
+        transform=dash_ax6.transAxes,
+        fontsize=11,
+        verticalalignment="top",
+        bbox=props,
     )
 
     plt.tight_layout()
-    return fig
+
+    # Handle display based on display_mode
+    individual_figs = [fig1, fig2, fig3, fig4, fig5]
+    all_figs = individual_figs + [dashboard_fig]
+
+    # Close figures we don't want to display
+    if display_mode == "dashboard":
+        for fig in individual_figs:
+            plt.close(fig)
+        # Only display the dashboard
+        if was_interactive:
+            plt.ion()  # Restore interactive mode
+            dashboard_fig.show()
+        return dashboard_fig
+
+    elif display_mode == "individual":
+        plt.close(dashboard_fig)
+        # Only display individual figures
+        if was_interactive:
+            plt.ion()  # Restore interactive mode
+            for fig in individual_figs:
+                fig.show()
+        return tuple(individual_figs)
+
+    elif display_mode == "all":
+        # Display all figures
+        if was_interactive:
+            plt.ion()  # Restore interactive mode
+            for fig in all_figs:
+                fig.show()
+        return tuple(all_figs)
+
+    else:  # 'none' or any other value
+        # Don't display any figures, just return them
+        for fig in all_figs:
+            plt.close(fig)
+        if was_interactive:
+            plt.ion()  # Restore interactive mode
+        return tuple(all_figs)
+
+
+def visualize_routes(model, caregiver_ids=None, subplot_mode=False, figsize=None, dpi=100):
+    """
+    Visualize routes taken by selected caregivers with a simple, clean layout.
+
+    Args:
+        model: The optimized BaseModel or FlexibleModel instance with solution
+        caregiver_ids: List of caregiver IDs to display (if None, all caregivers are shown)
+        figsize: Size of the figure to create
+        dpi: Resolution of the figure
+        subplot_mode: If True, create a separate subplot for each caregiver;
+                     if False, plot all routes on the same axes (default)
+
+    Returns:
+        If subplot_mode is False:
+            matplotlib figure and single axis object
+        If subplot_mode is True:
+            matplotlib figure and array of axis objects (one per caregiver)
+    """
+
+    # Use model.clients
+    clients_df = model.clients
+
+    # Extract solution if not already done
+    if model.routes is None or model.arrivals is None:
+        raise ValueError("Model must be solved before visualization.")
+
+    # If caregiver_ids is None, use all caregivers
+    if caregiver_ids is None:
+        caregiver_ids = model.K
+
+    if figsize is None:
+        figsize = (10, 2 * len(caregiver_ids))
+
+    # Set up colors for caregivers - use distinct colors
+    colors = list(mcolors.TABLEAU_COLORS)
+
+    # Get active clients
+    active_clients = model.tasks["ClientID"].unique()
+    active_client_data = clients_df.loc[clients_df.index.isin(active_clients)]
+
+    # Helper function to plot a caregiver's route
+    def plot_caregiver_route(ax, k, k_idx):
+        color = colors[k_idx % len(colors)]
+
+        # Skip caregivers with no routes
+        if not model.routes[k]:
+            return False
+
+        # Process route data
+        route_x = []
+        route_y = []
+        route_tasks = []
+
+        # Handle start point
+        start_loc = model.get_endpoint(k, "start")
+        if start_loc == "HQ":
+            start_x, start_y = 0, 0
+            route_x.append(start_x)
+            route_y.append(start_y)
+            route_tasks.append(None)
+
+        # Process each task in the route
+        for i, j in model.routes[k]:
+            if j != "end":
+                client_id = model.get_location(j)
+                client_x = clients_df.loc[client_id, "x"]
+                client_y = clients_df.loc[client_id, "y"]
+                route_x.append(client_x)
+                route_y.append(client_y)
+                route_tasks.append(j)
+
+        # Handle end point
+        end_loc = model.get_endpoint(k, "end")
+        if end_loc == "HQ":
+            end_x, end_y = 0, 0
+            route_x.append(end_x)
+            route_y.append(end_y)
+            route_tasks.append(None)
+
+        # Skip if no route was created
+        if len(route_x) <= 1:
+            return False
+
+        # Plot the route
+        ax.plot(route_x, route_y, color=color, linewidth=2, alpha=0.7, label=f"Caregiver {k}")
+
+        # Add order numbers for each visit
+        visit_order = 1
+        for i in range(len(route_x)):
+            if route_tasks[i] is not None:
+                ax.text(
+                    route_x[i],
+                    route_y[i],
+                    str(visit_order),
+                    fontsize=9,
+                    color="black",
+                    fontweight="bold",
+                    ha="center",
+                    va="center",
+                    bbox=dict(boxstyle="circle", facecolor="white", edgecolor=color, linewidth=1.5, alpha=0.9),
+                    zorder=3,
+                )
+                visit_order += 1
+
+        return True
+
+    if subplot_mode:
+        # Create a figure with subplots for each caregiver
+        n_caregivers = len(caregiver_ids)
+        n_cols = min(2, n_caregivers)  # Use max 2 columns
+        n_rows = int(np.ceil(n_caregivers / n_cols))
+
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, dpi=dpi)
+
+        # Handle the case of a single caregiver (axes won't be an array)
+        if n_caregivers == 1:
+            axes = np.array([axes])
+
+        # Flatten axes array for easier iteration
+        axes = np.array(axes).flatten()
+
+        # For each caregiver, create a separate subplot
+        for k_idx, k in enumerate(caregiver_ids):
+            ax = axes[k_idx]
+
+            # Plot all client nodes in the background
+            ax.scatter(active_client_data["x"], active_client_data["y"], color="lightgray", s=40, alpha=0.5)
+
+            # Plot the caregiver's route
+            has_route = plot_caregiver_route(ax, k, k_idx)
+
+            # Plot HQ
+            ax.scatter(0, 0, color="black", s=80, marker="s")
+
+            # Set title and labels
+            ax.set_title(f"Caregiver {k}" + (" (No Route)" if not has_route else ""))
+            ax.set_xlabel("X Coordinate")
+            ax.set_ylabel("Y Coordinate")
+
+            # Add grid
+            ax.grid(True, linestyle="--", alpha=0.3)
+
+            # Adjust axes to have some margin
+            ax.margins(0.1)
+
+        # Hide any unused subplots
+        for idx in range(len(caregiver_ids), len(axes)):
+            axes[idx].set_visible(False)
+
+    else:
+        # Original single plot implementation
+        fig, ax = plt.subplots(figsize=figsize, dpi=dpi)
+
+        # Plot all client nodes in the background
+        ax.scatter(active_client_data["x"], active_client_data["y"], color="lightgray", s=40, alpha=0.5)
+
+        # For each caregiver, plot their route
+        for k_idx, k in enumerate(caregiver_ids):
+            plot_caregiver_route(ax, k, k_idx)
+
+        # Plot HQ
+        ax.scatter(0, 0, color="black", s=80, marker="s")
+
+        # Add legend for caregivers
+        ax.legend(loc="upper left", bbox_to_anchor=(1, 1))
+
+        # Set axis labels
+        ax.set_xlabel("X Coordinate")
+        ax.set_ylabel("Y Coordinate")
+
+        # Add grid
+        ax.grid(True, linestyle="--", alpha=0.3)
+
+        # Adjust axes to have some margin
+        ax.margins(0.1)
+
+    plt.tight_layout()
+    return fig, ax if not subplot_mode else (fig, axes)

@@ -9,7 +9,15 @@ class BaseModel(ABC):
     """Base class for all optimization models"""
 
     # Initialization
-    def __init__(self, caregivers, tasks, clients, drive_time_matrix, walk_time_matrix, bicycle_time_matrix):
+    def __init__(
+        self,
+        caregivers,  # ID,ModeOfTransport,Attributes,EarliestStartTime,LatestEndTime,StartLocation,EndLocation
+        tasks,  # ID,ClientID,StartTime,EndTime,TaskType,PlannedCaregiverID
+        clients,  # ID,Requirements,x,y
+        drive_time_matrix,  # ClientIDs. HQ is 0. Col is from, row is to.
+        walk_time_matrix,
+        bicycle_time_matrix,
+    ):
         """
         Initialize the base model with common data
 
