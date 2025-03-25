@@ -5,21 +5,11 @@ from gurobipy import GRB
 from .base_model import BaseModel
 
 
-class FlexibleModel(BaseModel):
-    def __calculate_big_M(self):
-        """
-        Calculates the big M for the models.
-        """
-        earliest_start = self.tasks["start_minutes"].min()
-        latest_end = self.tasks["end_minutes"].max()
-        max_travel_time = max(self.c.values())
-        M = 1.1 * (latest_end - earliest_start + 2 * max_travel_time)
-        return M
-
+class FixedModel(BaseModel):
     def build(self):
-        big_M = self.__calculate_big_M()
         self.model = gp.Model("HomeCare")
         self.x = {}
+        self.T = {}
         for k in self.K:
             for i in self.V:
                 # Add route to the start and end nodes
@@ -29,19 +19,12 @@ class FlexibleModel(BaseModel):
                     if i != j:
                         self.x[k, i, j] = self.model.addVar(vtype=GRB.BINARY, name=f"x^{k}_{i}_{j}")
 
-        # t[k,i] = arrival time of caregiver k at node i
-        self.t = {}
-        for k in self.K:
-            self.t[k, "start"] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"t^{k}_start")
-            self.t[k, "end"] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"t^{k}_end")
-            for i in self.V:
-                self.t[k, i] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"t^{k}_{i}")
-
-        self.model.update()
+                self.T[k, "start"] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"T^{k}_start")
+                self.T[k, "end"] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"T^{k}_end")
 
         # ---- Objective Function
         # Minimize time between start and end nodes for all caregivers
-        self.model.setObjective(gp.quicksum(self.t[k, "end"] - self.t[k, "start"] for k in self.K), GRB.MINIMIZE)
+        self.model.setObjective(gp.quicksum(self.T[k, "end"] - self.T[k, "start"] for k in self.K), GRB.MINIMIZE)
 
         # ---- Constraints
 
@@ -79,24 +62,35 @@ class FlexibleModel(BaseModel):
             name="Qualification",
         )
 
-        # Arriving within time windows
-        for k in self.K:
-            for i in self.V:
-                self.model.addConstr(self.t[k, i] >= self.e[i], name=f"Earliest[{k},{i}]")
-                self.model.addConstr(self.t[k, i] <= self.l[i] - self.s[i], name=f"Latest[{k},{i}]")
+        # Temporally infeasible tasks are not visited
+        self.model.addConstr(
+            gp.quicksum(
+                self.x[k, i, j]
+                for k in self.K
+                for j in self.V
+                for i in self.V
+                if i != j and self.e[j] < self.l[i] + self.c[k, i, j]
+            )
+            == 0,
+            name="TemporalInfeasibility",
+        )
 
-        # Temporal feasibility
+        # Start time before end time
         for k in self.K:
-            self.model.addConstr(self.t[k, "end"] >= self.t[k, "start"], name=f"TemporalFeasibility[{k}]")
-            for i in self.V + ["start"]:
-                for j in self.V + ["end"]:
-                    if i != j and not (i == "start" and j == "end"):
-                        service_time = 0 if i == "start" else self.s[i]
-                        travel_time = self.c[k, i, j]
-                        self.model.addConstr(
-                            self.t[k, j] >= self.t[k, i] + travel_time + service_time - big_M * (1 - self.x[k, i, j]),
-                            name=f"TimeLink[{k},{i}->{j}]",
-                        )
+            self.model.addConstr(self.T[k, "end"] >= self.T[k, "start"], name=f"TemporalFeasibility[{k}]")
+
+        # Start and end time "definitions"
+        for k in self.K:
+            self.model.addConstr(
+                self.T[k, "start"]
+                <= gp.quicksum(self.x[k, "start", i] * (self.e[i] - self.c[k, "start", i]) for i in self.V),
+                name=f"StartTime[{k}]",
+            )
+            self.model.addConstr(
+                self.T[k, "end"]
+                >= gp.quicksum(self.x[k, i, "end"] * (self.l[i] + self.c[k, i, "end"]) for i in self.V),
+                name=f"EndTime[{k}]",
+            )
 
         return self.model
 
@@ -104,14 +98,14 @@ class FlexibleModel(BaseModel):
         """
         Extract the arrival times at each task for each caregiver.
         """
-        arrivals = {}
+        self.arrivals = {}
         for k in self.K:
-            arrivals[k] = {}
-            arrivals[k]["start"] = self.t[k, "start"].X
+            self.arrivals[k] = {}
+            self.arrivals[k]["start"] = self.T[k, "start"].X
+            self.arrivals[k]["end"] = self.T[k, "end"].X
 
-            # Extract arrivals for tasks in the route
             for _, j in self.routes[k]:
-                arrivals[k][j] = self.t[k, j].X
-
-        self.arrivals = arrivals
-        return arrivals
+                if j == "end":
+                    continue
+                self.arrivals[k][j] = self.e[j]
+        return self.arrivals

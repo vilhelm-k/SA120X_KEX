@@ -21,3 +21,7 @@ data/saved_solutions/
 
 # OS specific
 .DS_Store
+
+# README rendering files
+README.html
+README_files/

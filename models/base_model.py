@@ -41,7 +41,9 @@ class BaseModel(ABC):
         self.K = self.caregivers.index.tolist()
         self.V = self.tasks.index.tolist()
         self.c = self.__calculate_travel_times()  # c[k,i,j] Travel time for k from i to j
-        self.s = self.__calculate_service_times()  # s[i] Service time at i
+        self.s = {i: self.tasks.loc[i, "duration_minutes"] for i in self.V}  # s[i] Service time for i
+        self.e = {i: self.tasks.loc[i, "start_minutes"] for i in self.V}  # e[i] Earliest start time for i
+        self.l = {i: self.tasks.loc[i, "end_minutes"] for i in self.V}  # l[i] Latest end time for
         self.caregiver_tasks = self.__determine_qualified_tasks()  # Qualified tasks for each caregiver
 
         # Model variables
@@ -86,15 +88,6 @@ class BaseModel(ABC):
                             travel_time = time_matrix.loc[self.get_location(i), self.get_location(j)]
                         c[k, i, j] = travel_time
         return c
-
-    def __calculate_service_times(self):
-        """
-        Calculate the service times for each task.
-        """
-        s = {}
-        for i in self.V:
-            s[i] = self.tasks.loc[i, "duration_minutes"]
-        return s
 
     def __determine_qualified_tasks(self):
         """
@@ -212,65 +205,4 @@ class BaseModel(ABC):
             print(f"Model not optimally solved. Status: {self.model.Status}")
         self.__extract_routes()
         self._extract_arrival_times()
-
-    def get_solution_details(self):
-        """
-        Get detailed information about the solution.
-
-        Returns:
-            dict: Dictionary containing solution details including:
-                - routes: Routes for each caregiver
-                - arrivals: Arrival times for each caregiver at each task
-                - total_travel_time: Total travel time for each caregiver
-                - total_waiting_time: Total waiting time for each caregiver
-                - utilization: Utilization of each caregiver
-        """
-        if self.routes is None or self.arrivals is None:
-            self.get_solution()
-
-        details = {
-            "routes": self.routes,
-            "arrivals": self.arrivals,
-            "total_travel_time": {},
-            "total_service_time": {},
-            "total_waiting_time": {},
-            "utilization": {},
-        }
-
-        # Calculate additional metrics
-        for k in self.K:
-            # Skip caregivers with no tasks
-            if not self.routes[k]:
-                continue
-
-            travel_time = 0
-            service_time = 0
-            waiting_time = 0
-
-            # Process each leg of the route
-            for i, j in self.routes[k]:
-                if j != "end":
-                    # Add travel time
-                    travel_time += self.c[k, i, j]
-
-                    # Add service time for task j
-                    service_time += self.s[j]
-
-                    # Calculate waiting time if arriving before start window
-                    start_minutes = self.tasks.loc[j, "start_minutes"]
-                    arrival_time = self.arrivals[k][j]
-                    if arrival_time < start_minutes:
-                        waiting_time += start_minutes - arrival_time
-
-            details["total_travel_time"][k] = travel_time
-            details["total_service_time"][k] = service_time
-            details["total_waiting_time"][k] = waiting_time
-
-            # Calculate utilization (service time / total time)
-            total_time = self.arrivals[k]["end"] - self.arrivals[k]["start"]
-            if total_time > 0:
-                details["utilization"][k] = service_time / total_time
-            else:
-                details["utilization"][k] = 0
-
-        return details
+        return self.routes, self.arrivals
