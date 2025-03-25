@@ -611,7 +611,7 @@ def visualize_routes(model, caregiver_ids=None, subplot_mode=False, figsize=None
             route_tasks.append(None)
 
         # Skip if no route was created
-        if len(route_x) <= 1:
+        if len(route_x) < 1:
             return False
 
         # Plot the route
