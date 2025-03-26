@@ -84,6 +84,20 @@ def visualize_schedule(model):
             )
             current_time += travel_duration
 
+        # Handle waiting at the end
+        if current_time < arrivals[k]["end"]:
+            waiting_duration = arrivals[k]["end"] - current_time
+            schedule_data.append(
+                {
+                    "Caregiver": k,
+                    "Activity": "Waiting",
+                    "Index": None,
+                    "Start": current_time,
+                    "Duration": waiting_duration,
+                    "Color": "lightgray",
+                }
+            )
+
     # Create the visualization
     df = pd.DataFrame(schedule_data)
 

@@ -38,7 +38,7 @@ class BaseModel(ABC):
         self.bicycle_time_matrix = bicycle_time_matrix
 
         # Preprocessed input data
-        self.break_length = 30
+        self.break_length = 30  # Length of break in minutes
         self.K = self.caregivers.index.tolist()
         self.V = self.tasks.index.tolist()
         self.c = self.__calculate_travel_times()  # c[k,i,j] Travel time for k from i to j

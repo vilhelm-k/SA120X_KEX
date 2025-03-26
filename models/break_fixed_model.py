@@ -11,7 +11,7 @@ class BreakFixedModel(BaseModel):
         self.x = {}
         self.T = {}
         self.is_used = {}
-        self.y = {}  # Auxiliary variables for break sequences
+        self.B = {}  # Break variables
 
         # Create decision variables
         for k in self.K:
@@ -27,13 +27,7 @@ class BreakFixedModel(BaseModel):
                         self.x[k, i, j] = self.model.addVar(vtype=GRB.BINARY, name=f"x^{k}_{i}_{j}")
 
                 # Routes to/from break (only from regular tasks)
-                self.x[k, i, "break"] = self.model.addVar(vtype=GRB.BINARY, name=f"x^{k}_{i}_break")
-                self.x[k, "break", i] = self.model.addVar(vtype=GRB.BINARY, name=f"x^{k}_break_{i}")
-
-                # Auxiliary variables for break sequences (i→break→j)
-                for j in self.V:
-                    if i != j:
-                        self.y[k, i, j] = self.model.addVar(vtype=GRB.BINARY, name=f"y^{k}_{i}_{j}")
+                self.B[k, i] = self.model.addVar(vtype=GRB.BINARY, name=f"B^{k}_{i}")
 
             # Start and end times
             self.T[k, "start"] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"T^{k}_start")
@@ -41,6 +35,7 @@ class BreakFixedModel(BaseModel):
 
             # Caregiver usage
             self.is_used[k] = self.model.addVar(vtype=GRB.BINARY, name=f"is_used_{k}")
+        print("Created variables.")
 
         # ---- Objective Function
         caregiver_weight = 60
@@ -49,6 +44,7 @@ class BreakFixedModel(BaseModel):
             + caregiver_weight * gp.quicksum(self.is_used[k] for k in self.K),
             GRB.MINIMIZE,
         )
+        print("Created objective function.")
 
         # ---- Constraints
 
@@ -61,7 +57,7 @@ class BreakFixedModel(BaseModel):
         # Each task is visited exactly once by exactly one caregiver
         for i in self.V:
             self.model.addConstr(
-                gp.quicksum(self.x[k, j, i] for k in self.K for j in self.V + ["start", "break"] if j != i) == 1,
+                gp.quicksum(self.x[k, j, i] for k in self.K for j in self.V + ["start"] if j != i) == 1,
                 name=f"UniqueVisit[{i}]",
             )
 
@@ -69,19 +65,11 @@ class BreakFixedModel(BaseModel):
         for k in self.K:
             for i in self.V:
                 self.model.addConstr(
-                    gp.quicksum(self.x[k, i, j] for j in self.V + ["end", "break"] if j != i)
-                    - gp.quicksum(self.x[k, j, i] for j in self.V + ["start", "break"] if j != i)
+                    gp.quicksum(self.x[k, i, j] for j in self.V + ["end"] if j != i)
+                    - gp.quicksum(self.x[k, j, i] for j in self.V + ["start"] if j != i)
                     == 0,
                     name=f"Flow[{k},{i}]",
                 )
-
-        # Flow conservation for break nodes
-        for k in self.K:
-            self.model.addConstr(
-                gp.quicksum(self.x[k, i, "break"] for i in self.V) - gp.quicksum(self.x[k, "break", j] for j in self.V)
-                == 0,
-                name=f"BreakFlow[{k}]",
-            )
 
         # Only visit clients that the caregiver is qualified to visit
         self.model.addConstr(
@@ -89,25 +77,12 @@ class BreakFixedModel(BaseModel):
                 self.x[k, i, j]
                 for k in self.K
                 for j in self.V
-                for i in self.V + ["start", "break"]
+                for i in self.V + ["start"]
                 if j not in self.caregiver_tasks[k] and i != j
             )
             == 0,
             name="Qualification",
         )
-
-        # Link break sequence variables to x variables
-        for k in self.K:
-            for i in self.V:
-                for j in self.V:
-                    if i != j:
-                        # y[k,i,j] = 1 iff x[k,i,"break"] = 1 and x[k,"break",j] = 1
-                        self.model.addConstr(self.y[k, i, j] <= self.x[k, i, "break"], name=f"BreakSeq1[{k},{i},{j}]")
-                        self.model.addConstr(self.y[k, i, j] <= self.x[k, "break", j], name=f"BreakSeq2[{k},{i},{j}]")
-                        self.model.addConstr(
-                            self.y[k, i, j] >= self.x[k, i, "break"] + self.x[k, "break", j] - 1,
-                            name=f"BreakSeq3[{k},{i},{j}]",
-                        )
 
         # Temporally infeasible tasks are not visited
         self.model.addConstr(
@@ -122,27 +97,31 @@ class BreakFixedModel(BaseModel):
             name="TemporalInfeasibility",
         )
 
-        # Temporally infeasible break sequences are not allowed (using indicator constraints)
+        # One break break every 5 hours of work
+        for k in self.K:
+            self.model.addConstr(
+                gp.quicksum(self.B[k, i] for i in self.V) >= (self.T[k, "end"] - self.T[k, "start"]) / (5 * 60) - 1,
+                name=f"BreakRequired[{k}]",
+            )
+
+        # Can only take a break if the caregiver visited a task
+        for k in self.K:
+            for i in self.V:
+                self.model.addConstr(
+                    self.B[k, i] <= gp.quicksum(self.x[k, i, j] for j in self.V if j != i),
+                    name=f"BreakVisit[{k},{i}]",
+                )
+
+        # Break time constraints
         for k in self.K:
             for i in self.V:
                 for j in self.V:
                     if i != j:
-                        # Check if sequence i→break→j is temporally infeasible
-                        break_time = self.l[i] + self.s[i] + self.c[k, i, "break"] + 30 + self.c[k, "break", j]
-                        if self.e[j] < break_time:
-                            self.model.addGenConstrIndicator(
-                                self.y[k, i, j],
-                                1,  # When y[k,i,j] = 1
-                                False,  # Constraint must be false (infeasible)
-                                name=f"BreakSeqInfeasible[{k},{i},{j}]",
-                            )
-
-        # Required breaks based on shift length
-        for k in self.K:
-            self.model.addConstr(
-                gp.quicksum(self.x[k, i, "break"] for i in self.V) >= (self.T[k, "end"] - self.T[k, "start"]) / 5 * 60,
-                name=f"BreakRequirement[{k}]",
-            )
+                        self.model.addGenConstrIndicator(
+                            self.x[k, i, j],
+                            True,
+                            self.e[j] >= self.l[i] + self.c[k, i, j] + self.B[k, i] * self.break_length,
+                        )
 
         # Shift length constraints
         for k in self.K:
@@ -161,7 +140,7 @@ class BreakFixedModel(BaseModel):
             )
             self.model.addConstr(
                 self.T[k, "end"]
-                >= gp.quicksum(self.x[k, i, "end"] * (self.l[i] + self.s[i] + self.c[k, i, "end"]) for i in self.V),
+                >= gp.quicksum(self.x[k, i, "end"] * (self.l[i] + self.c[k, i, "end"]) for i in self.V),
                 name=f"EndTime[{k}]",
             )
 

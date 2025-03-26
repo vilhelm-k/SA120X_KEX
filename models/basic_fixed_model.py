@@ -29,7 +29,7 @@ class BasicFixedModel(BaseModel):
             self.model.addConstr(
                 self.is_used[k] == gp.quicksum(self.x[k, "start", i] for i in self.V), name=f"Used[{k}]"
             )
-
+        print("Created variables.")
         # ---- Objective Function
         # Minimize time between start and end nodes for all caregivers
         caregiver_weight = 60
@@ -88,7 +88,14 @@ class BasicFixedModel(BaseModel):
         for k in self.K:
             self.model.addConstr(self.T[k, "end"] >= self.T[k, "start"], name=f"TemporalFeasibility[{k}]")
 
-            self.model.addConstr(self.T[k, "end"] - self.T[k, "start"] <= 12 * 60, name=f"TemporalFeasibility[{k}]")
+            # self.model.addGenConstrIndicator(
+            #     self.is_used[k],
+            #     True,
+            #     self.T[k, "end"] - self.T[k, "start"] >= 3.5 * 60,
+            #     name=f"TemporalFeasibility[{k}]",
+            # )
+
+            self.model.addConstr(self.T[k, "end"] - self.T[k, "start"] <= 10 * 60, name=f"TemporalFeasibility[{k}]")
 
         # Start and end time "definitions"
         for k in self.K:
