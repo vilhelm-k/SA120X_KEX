@@ -139,7 +139,9 @@ def visualize_schedule(model):
 
     # Set up the axis
     ax.set_yticks(list(y_positions.values()))
-    ax.set_yticklabels([f"Caregiver {cg}" for cg in y_positions.keys()])
+    ax.set_yticklabels(
+        [f"Caregiver {cg}\n {model.caregivers.loc[cg, "ModeOfTransport"]}" for cg in y_positions.keys()]
+    )
     ax.set_ylim(-0.5, len(y_positions) - 0.5)
 
     # Set x-axis to show hours
@@ -562,7 +564,8 @@ def visualize_routes(model, caregiver_ids=None, subplot_mode=False, figsize=None
         caregiver_ids = model.K
 
     if figsize is None:
-        figsize = (10, 2 * len(caregiver_ids))
+        height = 2 * len(caregiver_ids) if subplot_mode else 8
+        figsize = (10, max(8, height))
 
     # Set up colors for caregivers - use distinct colors
     colors = list(mcolors.TABLEAU_COLORS)
@@ -615,7 +618,14 @@ def visualize_routes(model, caregiver_ids=None, subplot_mode=False, figsize=None
             return False
 
         # Plot the route
-        ax.plot(route_x, route_y, color=color, linewidth=2, alpha=0.7, label=f"Caregiver {k}")
+        ax.plot(
+            route_x,
+            route_y,
+            color=color,
+            linewidth=2,
+            alpha=0.7,
+            label=f"Caregiver {k} ({model.caregivers.loc[k, 'ModeOfTransport']})",
+        )
 
         # Add order numbers for each visit
         visit_order = 1
@@ -666,7 +676,9 @@ def visualize_routes(model, caregiver_ids=None, subplot_mode=False, figsize=None
             ax.scatter(0, 0, color="black", s=80, marker="s")
 
             # Set title and labels
-            ax.set_title(f"Caregiver {k}" + (" (No Route)" if not has_route else ""))
+            ax.set_title(
+                f"Caregiver {k} ({model.caregivers.loc[k, "ModeOfTransport"]}) {" (No Route)" if not has_route else ""}"
+            )
             ax.set_xlabel("X Coordinate")
             ax.set_ylabel("Y Coordinate")
 
