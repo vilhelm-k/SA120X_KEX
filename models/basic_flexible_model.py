@@ -5,7 +5,7 @@ from gurobipy import GRB
 from .base_model import BaseModel
 
 
-class FlexibleModel(BaseModel):
+class BasicFlexibleModel(BaseModel):
     def __calculate_big_M(self):
         """
         Calculates the big M for the models.

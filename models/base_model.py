@@ -38,6 +38,7 @@ class BaseModel(ABC):
         self.bicycle_time_matrix = bicycle_time_matrix
 
         # Preprocessed input data
+        self.break_length = 30
         self.K = self.caregivers.index.tolist()
         self.V = self.tasks.index.tolist()
         self.c = self.__calculate_travel_times()  # c[k,i,j] Travel time for k from i to j
@@ -58,8 +59,10 @@ class BaseModel(ABC):
     def __calculate_travel_times(self):
         """
         Calculate the travel times between locations for each caregiver and task.
+        Handles special nodes (start, end, break) with appropriate travel times.
         """
         c = {}
+
         for k in self.K:
             mode_of_transport = self.caregivers.loc[k, "ModeOfTransport"]
             match mode_of_transport:
@@ -71,22 +74,24 @@ class BaseModel(ABC):
                     time_matrix = self.bicycle_time_matrix
                 case _:
                     raise ValueError(f"Unknown mode of transport: {mode_of_transport}")
-            for i in self.V + ["start"]:
-                for j in self.V + ["end"]:
-                    if i != j and not (i == "start" and j == "end"):
-                        # Calculate travel time based on locations
-                        if i == "start":
-                            # From start location to task
-                            start_location = self.get_endpoint(k, "start")
-                            travel_time = 0 if start_location == "Home" else time_matrix.loc[0, self.get_location(j)]
-                        elif j == "end":
-                            # From task to end location
-                            end_location = self.get_endpoint(k, "end")
-                            travel_time = 0 if end_location == "Home" else time_matrix.loc[self.get_location(i), 0]
-                        else:
-                            # From task to task
-                            travel_time = time_matrix.loc[self.get_location(i), self.get_location(j)]
-                        c[k, i, j] = travel_time
+
+            # Get endpoints for this caregiver
+            start_location = self.get_endpoint(k, "start")
+            end_location = self.get_endpoint(k, "end")
+            start_at_home = start_location == "Home"
+            end_at_home = end_location == "Home"
+
+            # Process all task pairs
+            for i in self.V:
+                # To special nodes
+                c[k, i, "end"] = 0 if end_at_home else time_matrix.loc[self.get_location(i), 0]
+                c[k, "start", i] = 0 if start_at_home else time_matrix.loc[0, self.get_location(i)]
+                c[k, i, "break"] = 0
+                c[k, "break", i] = 0
+                # Between tasks
+                for j in self.V:
+                    if i != j:
+                        c[k, i, j] = time_matrix.loc[self.get_location(i), self.get_location(j)]
         return c
 
     def __determine_qualified_tasks(self):

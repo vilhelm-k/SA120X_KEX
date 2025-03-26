@@ -4,13 +4,13 @@
 - [ ] Add lunch handling
 - [ ] Add minimum and maximum time constraints
 - [ ] Try problem modifications
-- [ ] Implement fixed model
 
 ## Up Next
   - [ ] Only one t variable per stop
 - [ ] Try relaxation
 
 ## Completed
+- [x] Implement fixed model
 - [x] Set up project structure
 - [x] Write functions to extract routes and times from the data
 - [x] Fix visualisation of schedule

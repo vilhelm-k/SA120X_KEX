@@ -5,11 +5,12 @@ from gurobipy import GRB
 from .base_model import BaseModel
 
 
-class FixedModel(BaseModel):
+class BasicFixedModel(BaseModel):
     def build(self):
         self.model = gp.Model("HomeCare")
         self.x = {}
         self.T = {}
+        self.is_used = {}
         for k in self.K:
             for i in self.V:
                 # Add route to the start and end nodes
@@ -19,12 +20,24 @@ class FixedModel(BaseModel):
                     if i != j:
                         self.x[k, i, j] = self.model.addVar(vtype=GRB.BINARY, name=f"x^{k}_{i}_{j}")
 
-                self.T[k, "start"] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"T^{k}_start")
-                self.T[k, "end"] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"T^{k}_end")
+            # Start and end times for each caregiver
+            self.T[k, "start"] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"T^{k}_start")
+            self.T[k, "end"] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"T^{k}_end")
+
+            # Define if caregiver k is used
+            self.is_used[k] = self.model.addVar(vtype=GRB.BINARY, name=f"is_used_{k}")
+            self.model.addConstr(
+                self.is_used[k] == gp.quicksum(self.x[k, "start", i] for i in self.V), name=f"Used[{k}]"
+            )
 
         # ---- Objective Function
         # Minimize time between start and end nodes for all caregivers
-        self.model.setObjective(gp.quicksum(self.T[k, "end"] - self.T[k, "start"] for k in self.K), GRB.MINIMIZE)
+        caregiver_weight = 60
+        self.model.setObjective(
+            gp.quicksum(self.T[k, "end"] - self.T[k, "start"] for k in self.K)
+            + caregiver_weight * gp.quicksum(self.is_used[k] for k in self.K),
+            GRB.MINIMIZE,
+        )
 
         # ---- Constraints
 
@@ -44,10 +57,6 @@ class FixedModel(BaseModel):
                     == 0,
                     name=f"Flow[{k},{i}]",
                 )
-
-        # Route completion (start and end usage) for each caregiver
-        for k in self.K:
-            self.model.addConstr(gp.quicksum(self.x[k, "start", i] for i in self.V) <= 1, name=f"StartBalance[{k}]")
 
         # Only visit clients that the caregiver is qualified to visit
         self.model.addConstr(
@@ -79,6 +88,8 @@ class FixedModel(BaseModel):
         for k in self.K:
             self.model.addConstr(self.T[k, "end"] >= self.T[k, "start"], name=f"TemporalFeasibility[{k}]")
 
+            self.model.addConstr(self.T[k, "end"] - self.T[k, "start"] <= 12 * 60, name=f"TemporalFeasibility[{k}]")
+
         # Start and end time "definitions"
         for k in self.K:
             self.model.addConstr(
@@ -91,7 +102,7 @@ class FixedModel(BaseModel):
                 >= gp.quicksum(self.x[k, i, "end"] * (self.l[i] + self.c[k, i, "end"]) for i in self.V),
                 name=f"EndTime[{k}]",
             )
-
+        print("Model built.")
         return self.model
 
     def _extract_arrival_times(self):
