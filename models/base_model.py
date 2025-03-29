@@ -46,6 +46,7 @@ class BaseModel(ABC):
         self.e = {i: self.tasks.loc[i, "start_minutes"] for i in self.V}  # e[i] Earliest start time for i
         self.l = {i: self.tasks.loc[i, "end_minutes"] for i in self.V}  # l[i] Latest end time for
         self.caregiver_tasks = self.__determine_qualified_tasks()  # Qualified tasks for each caregiver
+        self.feasible_breaks = self.__determine_feasible_breaks()  # Feasible breaks for each caregiver
 
         # Model variables
         self.model = None
@@ -109,6 +110,18 @@ class BaseModel(ABC):
             caregiver_tasks[k] = self.tasks[self.tasks["ClientID"].isin(qualified_clients)].index.tolist()
 
         return caregiver_tasks
+
+    def __determine_feasible_breaks(self):
+        """
+        Determine feasible breaks for each caregiver based on their schedule.
+        """
+        breaks = {}
+        for k in self.K:
+            for i in self.V:
+                for j in self.V:
+                    if i != j:
+                        breaks[k, i, j] = 1 if self.e[j] > self.l[i] + self.c[k, i, j] + self.break_length else 0
+        return breaks
 
     # Model building
     @abstractmethod

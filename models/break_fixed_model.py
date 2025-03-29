@@ -11,7 +11,8 @@ class BreakFixedModel(BaseModel):
         self.x = {}
         self.T = {}
         self.is_used = {}
-        self.B = {}  # Break variables
+        self.B = {}
+        self.overtime = {}
 
         # Create decision variables
         for k in self.K:
@@ -33,7 +34,8 @@ class BreakFixedModel(BaseModel):
             self.T[k, "start"] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"T^{k}_start")
             self.T[k, "end"] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"T^{k}_end")
 
-            # Caregiver usage
+            self.overtime[k] = self.model.addVar(vtype=GRB.CONTINUOUS, lb=0, name=f"overtime_{k}")
+
             self.is_used[k] = self.model.addVar(vtype=GRB.BINARY, name=f"is_used_{k}")
         print("Created variables.")
 
@@ -41,6 +43,7 @@ class BreakFixedModel(BaseModel):
         caregiver_weight = 60
         self.model.setObjective(
             gp.quicksum(self.T[k, "end"] - self.T[k, "start"] for k in self.K)
+            + 1.5 * gp.quicksum(self.overtime[k] for k in self.K)
             + caregiver_weight * gp.quicksum(self.is_used[k] for k in self.K),
             GRB.MINIMIZE,
         )
@@ -108,28 +111,22 @@ class BreakFixedModel(BaseModel):
         for k in self.K:
             for i in self.V:
                 self.model.addConstr(
-                    self.B[k, i] <= gp.quicksum(self.x[k, i, j] for j in self.V if j != i),
+                    self.B[k, i]
+                    <= gp.quicksum(self.feasible_breaks[k, i, j] * self.x[k, i, j] for j in self.V if j != i),
                     name=f"BreakVisit[{k},{i}]",
                 )
-
-        # Break time constraints
-        for k in self.K:
-            for i in self.V:
-                for j in self.V:
-                    if i != j:
-                        self.model.addGenConstrIndicator(
-                            self.x[k, i, j],
-                            True,
-                            self.e[j] >= self.l[i] + self.c[k, i, j] + self.B[k, i] * self.break_length,
-                        )
 
         # Shift length constraints
         for k in self.K:
             # Start time before end time
             self.model.addConstr(self.T[k, "end"] >= self.T[k, "start"], name=f"StartBeforeEnd[{k}]")
 
-            # Maximum shift length (12 hours)
-            self.model.addConstr(self.T[k, "end"] - self.T[k, "start"] <= 12 * 60, name=f"MaxShiftLength[{k}]")
+            # Overtime calculation constraint - overtime is hours worked beyond 8 hours
+            regular_hours = 8 * 60  # 8 hours in minutes
+            self.model.addConstr(
+                self.overtime[k] >= self.T[k, "end"] - self.T[k, "start"] - regular_hours,
+                name=f"OvertimeCalculation[{k}]",
+            )
 
         # Start and end time definitions
         for k in self.K:

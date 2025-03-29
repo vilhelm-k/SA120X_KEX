@@ -11,6 +11,8 @@ class BasicFixedModel(BaseModel):
         self.x = {}
         self.T = {}
         self.is_used = {}
+        self.overtime = {}  # Variable to track overtime hours beyond 8 hours
+        caregiver_weight = 60
         for k in self.K:
             for i in self.V:
                 # Add route to the start and end nodes
@@ -24,6 +26,9 @@ class BasicFixedModel(BaseModel):
             self.T[k, "start"] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"T^{k}_start")
             self.T[k, "end"] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"T^{k}_end")
 
+            # Add variable for overtime (hours worked beyond 8 hours)
+            self.overtime[k] = self.model.addVar(vtype=GRB.CONTINUOUS, lb=0, name=f"overtime_{k}")
+
             # Define if caregiver k is used
             self.is_used[k] = self.model.addVar(vtype=GRB.BINARY, name=f"is_used_{k}")
             self.model.addConstr(
@@ -32,9 +37,10 @@ class BasicFixedModel(BaseModel):
         print("Created variables.")
         # ---- Objective Function
         # Minimize time between start and end nodes for all caregivers
-        caregiver_weight = 60
+        # Regular time + overtime hours (penalized double) + caregiver usage penalty
         self.model.setObjective(
-            gp.quicksum(self.T[k, "end"] - self.T[k, "start"] for k in self.K)
+            gp.quicksum(self.T[k, "end"] - self.T[k, "start"] - self.overtime[k] for k in self.K)
+            + 1.5 * gp.quicksum(self.overtime[k] for k in self.K)  # Overtime costs twice as much
             + caregiver_weight * gp.quicksum(self.is_used[k] for k in self.K),
             GRB.MINIMIZE,
         )
@@ -88,14 +94,12 @@ class BasicFixedModel(BaseModel):
         for k in self.K:
             self.model.addConstr(self.T[k, "end"] >= self.T[k, "start"], name=f"TemporalFeasibility[{k}]")
 
-            # self.model.addGenConstrIndicator(
-            #     self.is_used[k],
-            #     True,
-            #     self.T[k, "end"] - self.T[k, "start"] >= 3.5 * 60,
-            #     name=f"TemporalFeasibility[{k}]",
-            # )
-
-            self.model.addConstr(self.T[k, "end"] - self.T[k, "start"] <= 10 * 60, name=f"TemporalFeasibility[{k}]")
+            # Overtime calculation constraint - overtime is hours worked beyond 8 hours
+            regular_hours = 8 * 60  # 8 hours in minutes
+            self.model.addConstr(
+                self.overtime[k] >= self.T[k, "end"] - self.T[k, "start"] - regular_hours,
+                name=f"OvertimeCalculation[{k}]",
+            )
 
         # Start and end time "definitions"
         for k in self.K:
