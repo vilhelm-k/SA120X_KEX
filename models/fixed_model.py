@@ -189,11 +189,11 @@ class FixedModel(BaseModel):
                         self.model.addConstr(self.new_serve[k, c] == 0, name=f"NoNewServe[{k},{c}]")
                         continue
 
-                    self.model.addConstr(
-                        self.new_serve[k, c]
-                        >= gp.quicksum(self.x[k, i, j] for i in self.V + ["start"] for j in self.Vc[c] if i != j),
-                        name=f"NewServe[{k},{c}]",
-                    )
+                    for i in self.Vc[c]:
+                        self.model.addConstr(
+                            self.new_serve[k, c] >= gp.quicksum(self.x[k, i, j] for i in self.V + ["start"] if i != j),
+                            name=f"NewServe[{k},{c}]",
+                        )
 
             # Add continuity penalty term to objective
             objective_terms.append(
