@@ -38,7 +38,6 @@ class BaseModel(ABC):
         self.bicycle_time_matrix = bicycle_time_matrix
 
         # Preprocessed input data
-        self.break_length = 30  # Length of break in minutes
         self.K = self.caregivers.index.tolist()
         self.V = self.tasks.index.tolist()
         self.c = self.__calculate_travel_times()  # c[k,i,j] Travel time for k from i to j
@@ -46,7 +45,6 @@ class BaseModel(ABC):
         self.e = {i: self.tasks.loc[i, "start_minutes"] for i in self.V}  # e[i] Earliest start time for i
         self.l = {i: self.tasks.loc[i, "end_minutes"] for i in self.V}  # l[i] Latest end time for
         self.caregiver_tasks = self.__determine_qualified_tasks()  # Qualified tasks for each caregiver
-        self.feasible_breaks = self.__determine_feasible_breaks()  # Feasible breaks for each caregiver
 
         # Model variables
         self.model = None
@@ -111,7 +109,7 @@ class BaseModel(ABC):
 
         return caregiver_tasks
 
-    def __determine_feasible_breaks(self):
+    def determine_feasible_breaks(self, break_length):
         """
         Determine feasible breaks for each caregiver based on their schedule.
         """
@@ -120,7 +118,7 @@ class BaseModel(ABC):
             for i in self.V:
                 for j in self.V:
                     if i != j:
-                        breaks[k, i, j] = 1 if self.e[j] > self.l[i] + self.c[k, i, j] + self.break_length else 0
+                        breaks[k, i, j] = 1 if self.e[j] > self.l[i] + self.c[k, i, j] + break_length else 0
         return breaks
 
     # Model building

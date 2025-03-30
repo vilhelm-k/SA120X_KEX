@@ -1,20 +1,26 @@
-import pandas as pd
-import numpy as np
 import gurobipy as gp
 from gurobipy import GRB
 from .base_model import BaseModel
 
 
-class BreakFixedModel(BaseModel):
-    def build(self):
+class FixedModel(BaseModel):
+    def build(
+        self,
+        overtime_penalty=1.5,
+        caregiver_penalty=60,
+        worktime_per_break=5 * 60,
+        regular_hours=8 * 60,
+        break_length=30,
+    ):
+        # ---- Base Model Construction ----
         self.model = gp.Model("HomeCare")
-        self.x = {}
-        self.T = {}
-        self.is_used = {}
-        self.B = {}
-        self.overtime = {}
 
-        # Create decision variables
+        # Base variables
+        self.x = {}  # Route variables
+        self.T = {}  # Time variables
+        self.is_used = {}  # Caregiver usage variables
+
+        # Create base decision variables
         for k in self.K:
             # Regular task routes
             for i in self.V:
@@ -27,29 +33,16 @@ class BreakFixedModel(BaseModel):
                     if i != j:
                         self.x[k, i, j] = self.model.addVar(vtype=GRB.BINARY, name=f"x^{k}_{i}_{j}")
 
-                # Routes to/from break (only from regular tasks)
-                self.B[k, i] = self.model.addVar(vtype=GRB.BINARY, name=f"B^{k}_{i}")
-
             # Start and end times
             self.T[k, "start"] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"T^{k}_start")
             self.T[k, "end"] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"T^{k}_end")
 
-            self.overtime[k] = self.model.addVar(vtype=GRB.CONTINUOUS, lb=0, name=f"overtime_{k}")
-
+            # Caregiver usage
             self.is_used[k] = self.model.addVar(vtype=GRB.BINARY, name=f"is_used_{k}")
-        print("Created variables.")
 
-        # ---- Objective Function
-        caregiver_weight = 60
-        self.model.setObjective(
-            gp.quicksum(self.T[k, "end"] - self.T[k, "start"] for k in self.K)
-            + 1.5 * gp.quicksum(self.overtime[k] for k in self.K)
-            + caregiver_weight * gp.quicksum(self.is_used[k] for k in self.K),
-            GRB.MINIMIZE,
-        )
-        print("Created objective function.")
+        print("Created base variables.")
 
-        # ---- Constraints
+        # ---- Base Constraints ----
 
         # Define caregiver usage
         for k in self.K:
@@ -100,34 +93,6 @@ class BreakFixedModel(BaseModel):
             name="TemporalInfeasibility",
         )
 
-        # One break break every 5 hours of work
-        for k in self.K:
-            self.model.addConstr(
-                gp.quicksum(self.B[k, i] for i in self.V) >= (self.T[k, "end"] - self.T[k, "start"]) / (5 * 60) - 1,
-                name=f"BreakRequired[{k}]",
-            )
-
-        # Can only take a break if the caregiver visited a task
-        for k in self.K:
-            for i in self.V:
-                self.model.addConstr(
-                    self.B[k, i]
-                    <= gp.quicksum(self.feasible_breaks[k, i, j] * self.x[k, i, j] for j in self.V if j != i),
-                    name=f"BreakVisit[{k},{i}]",
-                )
-
-        # Shift length constraints
-        for k in self.K:
-            # Start time before end time
-            self.model.addConstr(self.T[k, "end"] >= self.T[k, "start"], name=f"StartBeforeEnd[{k}]")
-
-            # Overtime calculation constraint - overtime is hours worked beyond 8 hours
-            regular_hours = 8 * 60  # 8 hours in minutes
-            self.model.addConstr(
-                self.overtime[k] >= self.T[k, "end"] - self.T[k, "start"] - regular_hours,
-                name=f"OvertimeCalculation[{k}]",
-            )
-
         # Start and end time definitions
         for k in self.K:
             self.model.addConstr(
@@ -141,7 +106,75 @@ class BreakFixedModel(BaseModel):
                 name=f"EndTime[{k}]",
             )
 
-        print("Model built with break constraints.")
+            # Start time before end time (basic temporal constraint)
+            self.model.addConstr(self.T[k, "end"] >= self.T[k, "start"], name=f"StartBeforeEnd[{k}]")
+
+        # Base objective: minimize total time
+        base_objective = gp.quicksum(self.T[k, "end"] - self.T[k, "start"] for k in self.K)
+        self.model.setObjective(base_objective, GRB.MINIMIZE)
+
+        print("Built base model.")
+
+        # ---- Optional Components ----
+        objective_terms = [base_objective]
+
+        # 1. Add overtime penalties if needed
+        if overtime_penalty > 0:
+            print("Adding overtime penalties.")
+            self.overtime = {}
+
+            # Create overtime variables
+            for k in self.K:
+                self.overtime[k] = self.model.addVar(vtype=GRB.CONTINUOUS, lb=0, name=f"overtime_{k}")
+
+                # Overtime calculation constraint
+                self.model.addConstr(
+                    self.overtime[k] >= self.T[k, "end"] - self.T[k, "start"] - regular_hours,
+                    name=f"OvertimeCalculation[{k}]",
+                )
+
+            # Add overtime term to objective
+            objective_terms.append(overtime_penalty * gp.quicksum(self.overtime[k] for k in self.K))
+
+        # 2. Add caregiver penalty if needed
+        if caregiver_penalty > 0:
+            print("Adding caregiver usage penalties.")
+            # Add caregiver penalty term to objective
+            objective_terms.append(caregiver_penalty * gp.quicksum(self.is_used[k] for k in self.K))
+
+        # 3. Add break requirements if needed
+        if worktime_per_break > 0:
+            print("Adding break requirements.")
+            self.B = {}
+            feasible_breaks = self.determine_feasible_breaks(break_length)
+
+            # Create break variables
+            for k in self.K:
+                for i in self.V:
+                    self.B[k, i] = self.model.addVar(vtype=GRB.BINARY, name=f"B^{k}_{i}")
+
+            # Add break constraints
+            for k in self.K:
+                # One break for every worktime_per_break minutes of work
+                self.model.addConstr(
+                    gp.quicksum(self.B[k, i] for i in self.V)
+                    >= (self.T[k, "end"] - self.T[k, "start"]) / worktime_per_break - 1,
+                    name=f"BreakRequired[{k}]",
+                )
+
+                # Can only take a break if the caregiver visited a task
+                for i in self.V:
+                    self.model.addConstr(
+                        self.B[k, i]
+                        <= gp.quicksum(feasible_breaks[k, i, j] * self.x[k, i, j] for j in self.V if j != i),
+                        name=f"BreakVisit[{k},{i}]",
+                    )
+
+        # Update objective function with all terms
+        if len(objective_terms) > 1:  # If we added more terms beyond the base
+            self.model.setObjective(sum(objective_terms), GRB.MINIMIZE)
+            print("Updated objective function with penalties.")
+
         return self.model
 
     def _extract_arrival_times(self):
