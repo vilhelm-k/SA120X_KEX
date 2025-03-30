@@ -40,11 +40,14 @@ class BaseModel(ABC):
         # Preprocessed input data
         self.K = self.caregivers.index.tolist()
         self.V = self.tasks.index.tolist()
+        self.C = self.clients.index.tolist()
         self.c = self.__calculate_travel_times()  # c[k,i,j] Travel time for k from i to j
         self.s = {i: self.tasks.loc[i, "duration_minutes"] for i in self.V}  # s[i] Service time for i
         self.e = {i: self.tasks.loc[i, "start_minutes"] for i in self.V}  # e[i] Earliest start time for i
         self.l = {i: self.tasks.loc[i, "end_minutes"] for i in self.V}  # l[i] Latest end time for
         self.caregiver_tasks = self.__determine_qualified_tasks()  # Qualified tasks for each caregiver
+        self.Vc = self.__determine_client_tasks()  # Tasks for each client
+        self.H = {(k, c): 0 for k in self.K for c in self.C}  # H[k,i] represents if k has visited i historically
 
         # Model variables
         self.model = None
@@ -54,6 +57,15 @@ class BaseModel(ABC):
         # Postprocessed results
         self.routes = None
         self.arrivals = None
+
+    def __determine_client_tasks(self):
+        """
+        Determine which tasks are associated with each client.
+        """
+        client_tasks = {}
+        for c in self.C:
+            client_tasks[c] = self.tasks[self.tasks["ClientID"] == c].index.tolist()
+        return client_tasks
 
     def __calculate_travel_times(self):
         """

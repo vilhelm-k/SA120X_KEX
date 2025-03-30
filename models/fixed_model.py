@@ -11,6 +11,7 @@ class FixedModel(BaseModel):
         worktime_per_break=5 * 60,
         regular_hours=8 * 60,
         break_length=30,
+        continuity_penalty=30,
     ):
         # ---- Base Model Construction ----
         self.model = gp.Model("HomeCare")
@@ -169,6 +170,35 @@ class FixedModel(BaseModel):
                         <= gp.quicksum(feasible_breaks[k, i, j] * self.x[k, i, j] for j in self.V if j != i),
                         name=f"BreakVisit[{k},{i}]",
                     )
+
+        # 4. Add continuity of care penalties if needed
+        if continuity_penalty > 0:
+            print("Adding continuity of care penalties.")
+            self.new_serve = {}
+
+            # Create new_serve variables
+            for k in self.K:
+                for c in self.C:
+                    self.new_serve[k, c] = self.model.addVar(vtype=GRB.BINARY, name=f"new_serve_{k}_{c}")
+
+            # Add constraints to detect new assignments
+            for k in self.K:
+                for c in self.C:
+                    # If there's a historical assignment, new_serve must be 0
+                    if self.H[k, c] == 1:
+                        self.model.addConstr(self.new_serve[k, c] == 0, name=f"NoNewServe[{k},{c}]")
+                        continue
+
+                    self.model.addConstr(
+                        self.new_serve[k, c]
+                        >= gp.quicksum(self.x[k, i, j] for i in self.V + ["start"] for j in self.Vc[c] if i != j),
+                        name=f"NewServe[{k},{c}]",
+                    )
+
+            # Add continuity penalty term to objective
+            objective_terms.append(
+                continuity_penalty * gp.quicksum(self.new_serve[k, c] for k in self.K for c in self.C)
+            )
 
         # Update objective function with all terms
         if len(objective_terms) > 1:  # If we added more terms beyond the base
