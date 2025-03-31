@@ -18,7 +18,8 @@ class FixedModel(BaseModel):
 
         # Base variables
         self.x = {}  # Route variables
-        self.T = {}  # Time variables
+        self.E = {}  # End time variables
+        self.S = {}  # Start time variables
         self.is_used = {}  # Caregiver usage variables
 
         # Create base decision variables
@@ -35,8 +36,8 @@ class FixedModel(BaseModel):
                         self.x[k, i, j] = self.model.addVar(vtype=GRB.BINARY, name=f"x^{k}_{i}_{j}")
 
             # Start and end times
-            self.T[k, "start"] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"T^{k}_start")
-            self.T[k, "end"] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"T^{k}_end")
+            self.S[k] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"T^{k}_start")
+            self.E[k] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"T^{k}_end")
 
             # Caregiver usage
             self.is_used[k] = self.model.addVar(vtype=GRB.BINARY, name=f"is_used_{k}")
@@ -75,7 +76,7 @@ class FixedModel(BaseModel):
                 for k in self.K
                 for j in self.V
                 for i in self.V + ["start"]
-                if j not in self.caregiver_tasks[k] and i != j
+                if j not in self.Vk[k] and i != j
             )
             == 0,
             name="Qualification",
@@ -97,21 +98,19 @@ class FixedModel(BaseModel):
         # Start and end time definitions
         for k in self.K:
             self.model.addConstr(
-                self.T[k, "start"]
-                <= gp.quicksum(self.x[k, "start", i] * (self.e[i] - self.c[k, "start", i]) for i in self.V),
+                self.S[k] <= gp.quicksum(self.x[k, "start", i] * (self.e[i] - self.c[k, "start", i]) for i in self.V),
                 name=f"StartTime[{k}]",
             )
             self.model.addConstr(
-                self.T[k, "end"]
-                >= gp.quicksum(self.x[k, i, "end"] * (self.l[i] + self.c[k, i, "end"]) for i in self.V),
+                self.E[k] >= gp.quicksum(self.x[k, i, "end"] * (self.l[i] + self.c[k, i, "end"]) for i in self.V),
                 name=f"EndTime[{k}]",
             )
 
             # Start time before end time (basic temporal constraint)
-            self.model.addConstr(self.T[k, "end"] >= self.T[k, "start"], name=f"StartBeforeEnd[{k}]")
+            self.model.addConstr(self.E[k] >= self.S[k], name=f"StartBeforeEnd[{k}]")
 
         # Base objective: minimize total time
-        base_objective = gp.quicksum(self.T[k, "end"] - self.T[k, "start"] for k in self.K)
+        base_objective = gp.quicksum(self.E[k] - self.S[k] for k in self.K)
         self.model.setObjective(base_objective, GRB.MINIMIZE)
 
         print("Built base model.")
@@ -130,7 +129,7 @@ class FixedModel(BaseModel):
 
                 # Overtime calculation constraint
                 self.model.addConstr(
-                    self.overtime[k] >= self.T[k, "end"] - self.T[k, "start"] - regular_hours,
+                    self.overtime[k] >= self.E[k] - self.S[k] - regular_hours,
                     name=f"OvertimeCalculation[{k}]",
                 )
 
@@ -158,8 +157,7 @@ class FixedModel(BaseModel):
             for k in self.K:
                 # One break for every worktime_per_break minutes of work
                 self.model.addConstr(
-                    gp.quicksum(self.B[k, i] for i in self.V)
-                    >= (self.T[k, "end"] - self.T[k, "start"]) / worktime_per_break - 1,
+                    gp.quicksum(self.B[k, i] for i in self.V) >= (self.E[k] - self.S[k]) / worktime_per_break - 1,
                     name=f"BreakRequired[{k}]",
                 )
 
@@ -167,7 +165,9 @@ class FixedModel(BaseModel):
                 for i in self.V:
                     self.model.addConstr(
                         self.B[k, i]
-                        <= gp.quicksum(feasible_breaks[k, i, j] * self.x[k, i, j] for j in self.V if j != i),
+                        <= gp.quicksum(
+                            feasible_breaks[k, i, j] * self.x[k, i, j] for j in self.V if (k, i, j) in feasible_breaks
+                        ),
                         name=f"BreakVisit[{k},{i}]",
                     )
 
@@ -207,18 +207,26 @@ class FixedModel(BaseModel):
 
         return self.model
 
-    def _extract_arrival_times(self):
+    def _extract_routes(self):
         """
-        Extract the arrival times at each task for each caregiver.
+        Extracts the ordered route into a dictionary for each caregiver.
         """
-        self.arrivals = {}
-        for k in self.K:
-            self.arrivals[k] = {}
-            self.arrivals[k]["start"] = self.T[k, "start"].X
-            self.arrivals[k]["end"] = self.T[k, "end"].X
+        # First pass: build adjacency lists for each caregiver
+        adjacency = {k: {} for k in self.K}
 
-            for _, j in self.routes[k]:
-                if j == "end":
-                    continue
-                self.arrivals[k][j] = self.e[j]
-        return self.arrivals
+        for k, i, j in self.x:
+            if self.x[k, i, j].X > 0.5:
+                adjacency[k][i] = j
+
+        # Second pass: traverse adjacency lists to build ordered routes
+        routes = {k: [] for k in self.K}
+
+        for k in self.K:
+            current = "start"
+            while current in adjacency[k] and current != "end":
+                next_node = adjacency[k][current]
+                routes[k].append((current, next_node))
+                current = next_node
+
+        self.routes = routes
+        return routes

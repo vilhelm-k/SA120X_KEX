@@ -73,7 +73,7 @@ class BasicFlexibleModel(BaseModel):
                 for k in self.K
                 for j in self.V
                 for i in self.V + ["start"]
-                if j not in self.caregiver_tasks[k] and i != j
+                if j not in self.Vk[k] and i != j
             )
             == 0,
             name="Qualification",

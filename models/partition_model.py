@@ -1,247 +1,176 @@
 import gurobipy as gp
 from gurobipy import GRB
-from itertools import permutations, combinations
-import numpy as np
-import time
 from .base_model import BaseModel
-
-# Import the BaseModel class - this would actually be a relative import in practice
 
 
 class PartitionModel(BaseModel):
-    def __init__(self, *args, **kwargs):
-        """
-        Initialize the set partitioning model, extending the base model.
-        """
-        super().__init__(*args, **kwargs)
+    def build(
+        self,
+        caregiver_penalty=60,
+        overtime_penalty=1.5,
+        worktime_per_break=5 * 60,
+        continuity_penalty=30,
+        regular_hours=8 * 60,
+        break_length=30,
+    ):
+        print("Building partition model...")
+        # ---- Base Model Construction ----
+        self.model = gp.Model("PartitionHomeCareModel")
 
-        # Additional data structures for route generation and set partitioning
-        self.routes_pool = []  # List of route sequences [(start, task1, task2, ..., end), ...]
-        self.route_costs = []  # Total duration of each route
-        self.route_tasks = []  # List of tasks in each route [[task1, task2, ...], ...]
-        self.route_caregivers = []  # Caregiver assigned to each route
+        # Base variables
+        self.x = {}  # Route variables
+        self.S = {}  # Start time variables
+        self.E = {}  # End time variables
+        self.is_used = {}  # Caregiver usage variables
 
-        # Maps for efficient constraint generation
-        self.task_routes = {}  # Maps task to routes covering it {task_id: [route_idx1, route_idx2, ...], ...}
-        self.caregiver_routes = {}  # Maps caregiver to routes {caregiver_id: [route_idx1, route_idx2, ...], ...}
-
-        # Solution variables
-        self.lambda_vars = None  # Binary variables for route selection
-
-    def build(self, max_tasks_per_route=5, caregiver_penalty=60):
-        """
-        Build the set partitioning model by:
-        1. Generating feasible routes
-        2. Creating the set partitioning constraints
-
-        Args:
-            max_tasks_per_route: Maximum number of tasks in a route
-            caregiver_penalty: Penalty for using a caregiver
-
-        Returns:
-            The built Gurobi model
-        """
-        print("Building set partitioning model for home healthcare routing...")
-        start_time = time.time()
-
-        # Create the optimization model
-        self.model = gp.Model("HomeCare_SetPartitioning")
-
-        # Generate all feasible routes
-        self._generate_routes(max_tasks_per_route)
-        route_gen_time = time.time() - start_time
-        print(f"Route generation complete in {route_gen_time:.2f} seconds")
-        print(f"Generated {len(self.routes_pool)} feasible routes")
-
-        # Create binary decision variables for routes
-        self.lambda_vars = self.model.addVars(range(len(self.routes_pool)), vtype=GRB.BINARY, name="route")
-
-        # Each task must be covered exactly once
-        for i in self.V:
-            if i in self.task_routes and self.task_routes[i]:
-                self.model.addConstr(
-                    gp.quicksum(self.lambda_vars[r] for r in self.task_routes[i]) == 1, f"Cover_task_{i}"
-                )
-            else:
-                print(f"Warning: Task {i} has no feasible routes")
-
-        # Each caregiver can be assigned at most one route
+        # Create base decision variables
         for k in self.K:
-            if k in self.caregiver_routes and self.caregiver_routes[k]:
-                self.model.addConstr(
-                    gp.quicksum(self.lambda_vars[r] for r in self.caregiver_routes[k]) <= 1, f"Caregiver_{k}_usage"
-                )
+            for i in self.V:
+                # Caregiver k visits task i
+                self.x[k, i] = self.model.addVar(vtype=GRB.BINARY, name=f"x^{k}_{i}")
 
-        # Objective: minimize total time + caregiver penalty
-        self.model.setObjective(
-            gp.quicksum(self.route_costs[r] * self.lambda_vars[r] for r in range(len(self.routes_pool)))
-            + caregiver_penalty
-            * gp.quicksum(
-                gp.quicksum(self.lambda_vars[r] for r in self.caregiver_routes[k])
-                for k in self.K
-                if k in self.caregiver_routes
-            ),
-            GRB.MINIMIZE,
+            # Start and end times
+            self.S[k] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"S^{k}")
+            self.E[k] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"E^{k}")
+
+            # Caregiver usage
+            self.is_used[k] = self.model.addVar(vtype=GRB.BINARY, name=f"is_used_{k}")
+
+        print("Created base variables.")
+
+        # ---- Base Constraints ----
+
+        # Define caregiver usage
+        for k in self.K:
+            self.model.addGenConstrOr(self.is_used[k], [self.x[k, i] for i in self.V], name=f"Used[{k}]")
+
+        # Each task is visited exactly once by exactly one caregiver
+        for i in self.V:
+            self.model.addConstr(gp.quicksum(self.x[k, i] for k in self.K) == 1, name=f"UniqueVisit[{i}]")
+
+        # Only visit clients that the caregiver is qualified to visit
+        self.model.addConstr(
+            gp.quicksum(self.x[k, i] for k in self.K for i in self.V if i not in self.Vk[k]) == 0,
+            name="Qualification",
         )
 
-        build_time = time.time() - start_time
-        print(f"Model built in {build_time:.2f} seconds")
-        print(f"Model has {self.model.NumVars} variables and {self.model.NumConstrs} constraints")
+        # Temporally infeasible pairs of tasks are not possible
+        for k, i, j in self.A:
+            if self.A[k, i, j] == 0:
+                self.model.addConstr(self.x[k, i] + self.x[k, j] <= 1, name=f"InfeasiblePair[{k},{i},{j}]")
 
+        # Start and end time definitions
+        for k in self.K:
+            self.model.addConstr(self.E[k] >= self.S[k], name=f"StartBeforeEnd[{k}]")
+            for i in self.V:
+                self.model.addGenConstrIndicator(
+                    self.x[k, i],
+                    True,
+                    self.S[k] <= self.e[i] - self.c[k, "start", i],
+                    name=f"StartTime[{k},{i}]",
+                )
+                self.model.addGenConstrIndicator(
+                    self.x[k, i],
+                    True,
+                    self.E[k] >= self.l[i] + self.c[k, i, "end"],
+                    name=f"EndTime[{k},{i}]",
+                )
+        print("Built base model.")
+
+        # Base objective: minimize total time
+        objective_terms = [gp.quicksum(self.E[k] - self.S[k] for k in self.K)]
+
+        # 1. Add overtime penalties if needed
+        if overtime_penalty > 0:
+            print("Adding overtime penalties.")
+            self.overtime = {}
+
+            # Create overtime variables
+            for k in self.K:
+                self.overtime[k] = self.model.addVar(vtype=GRB.CONTINUOUS, lb=0, name=f"overtime_{k}")
+
+                # Overtime calculation constraint
+                self.model.addConstr(
+                    self.overtime[k] >= self.E[k] - self.S[k] - regular_hours,
+                    name=f"OvertimeCalculation[{k}]",
+                )
+
+            # Add overtime term to objective
+            objective_terms.append(overtime_penalty * gp.quicksum(self.overtime[k] for k in self.K))
+
+        # 2. Add caregiver penalty if needed
+        if caregiver_penalty > 0:
+            print("Adding caregiver usage penalties.")
+            # Add caregiver penalty term to objective
+            objective_terms.append(caregiver_penalty * gp.quicksum(self.is_used[k] for k in self.K))
+
+        # 3. Add break requirements if needed
+        if worktime_per_break > 0:
+            print("Adding break requirements.")
+            self.B = {}
+            feasible_breaks = self.determine_feasible_breaks(break_length)
+
+            # Create break variables
+            for k in self.K:
+                for i in self.V:
+                    self.B[k, i] = self.model.addVar(vtype=GRB.BINARY, name=f"B^{k}_{i}")
+
+            # Add break constraints
+            for k in self.K:
+                # One break for every worktime_per_break minutes of work
+                self.model.addConstr(
+                    gp.quicksum(self.B[k, i] for i in self.V) >= (self.E[k] - self.S[k]) / worktime_per_break - 1,
+                    name=f"BreakRequired[{k}]",
+                )
+
+                # Can only take a break if the caregiver visited a task
+            for k, i, j in feasible_breaks:
+                if not feasible_breaks[k, i, j]:
+                    self.model.addConstr(self.B[k, i] + self.x[k, j] <= 1, name=f"BreakVisit[{k},{i},{j}]")
+
+        # 4. Add continuity of care penalties if needed
+        if continuity_penalty > 0:
+            print("Adding continuity of care penalties.")
+            self.new_serve = {}
+
+            # Create new_serve variables
+            for k in self.K:
+                for c in self.C:
+                    self.new_serve[k, c] = self.model.addVar(vtype=GRB.BINARY, name=f"new_serve_{k}_{c}")
+
+            # Add constraints to detect new assignments
+            for k in self.K:
+                for c in self.C:
+                    for i in self.Vc[c]:
+                        self.model.addConstr(
+                            self.new_serve[k, c] >= self.x[k, i] - self.H[k, c],
+                            name=f"NewServe[{k},{c},{i}]",
+                        )
+
+            # Add continuity penalty term to objective
+            objective_terms.append(
+                continuity_penalty * gp.quicksum(self.new_serve[k, c] for k in self.K for c in self.C)
+            )
+
+        self.model.setObjective(sum(objective_terms), GRB.MINIMIZE)
         return self.model
 
-    def _generate_routes(self, max_tasks_per_route=15, max_routes_per_caregiver=10000):
+    def _extract_routes(self):
         """
-        Generate all feasible routes for each caregiver.
-
-        Args:
-            max_tasks_per_route: Maximum number of tasks in a route
-            max_routes_per_caregiver: Maximum number of routes to generate per caregiver
+        Extract the routes for each caregiver from the model.
         """
-        print(f"Generating routes with up to {max_tasks_per_route} tasks per route...")
-
-        # Initialize route mapping structures
-        self.task_routes = {i: [] for i in self.V}
-        self.caregiver_routes = {k: [] for k in self.K}
-
-        # Generate routes for each caregiver
+        self.routes = {}
         for k in self.K:
-            qualified_tasks = self.caregiver_tasks[k]
-            if not qualified_tasks:
+            tasks = []
+            for i in self.V:
+                if self.x[k, i].X > 0.5:
+                    tasks.append(i)
+            if not tasks:
                 continue
+            tasks.sort(key=lambda i: self.e[i])
 
-            routes_generated = 0
-
-            # Generate routes of different lengths
-            for route_length in range(1, min(max_tasks_per_route + 1, len(qualified_tasks) + 1)):
-                # For each possible combination of tasks of the given length
-                for task_subset in combinations(qualified_tasks, route_length):
-                    # For each possible ordering of tasks
-                    for task_sequence in permutations(task_subset):
-                        # Check if this sequence is temporally feasible
-                        is_feasible, route_info = self._check_route_feasibility(k, task_sequence)
-
-                        if is_feasible:
-                            # Add route to the pool
-                            route_idx = len(self.routes_pool)
-
-                            # Store the route
-                            self.routes_pool.append(("start",) + task_sequence + ("end",))
-                            self.route_costs.append(route_info["duration"])
-                            self.route_tasks.append(task_sequence)
-                            self.route_caregivers.append(k)
-
-                            # Update mappings
-                            for task in task_sequence:
-                                self.task_routes[task].append(route_idx)
-                            self.caregiver_routes[k].append(route_idx)
-
-                            routes_generated += 1
-
-                        # Check if we've hit the limit for this caregiver
-                        if routes_generated >= max_routes_per_caregiver:
-                            break
-
-                    if routes_generated >= max_routes_per_caregiver:
-                        break
-
-                if routes_generated >= max_routes_per_caregiver:
-                    break
-
-            print(f"Generated {routes_generated} feasible routes for caregiver {k}")
-
-    def _check_route_feasibility(self, k, task_sequence):
-        """
-        Check if a route is temporally feasible for a given caregiver.
-
-        Args:
-            k: Caregiver ID
-            task_sequence: Sequence of tasks [(task1, task2, ...)]
-
-        Returns:
-            (is_feasible, route_info): Tuple with feasibility flag and route information
-        """
-        current_location = "start"
-        current_time = 0
-        task_times = {}  # Start times for each task
-
-        # Check each task in sequence
-        for task in task_sequence:
-            # Travel time from current location to task
-            travel_time = self.c[k, current_location, task]
-
-            # Arrival time at task
-            arrival_time = current_time + travel_time
-
-            # Check if arrival is before latest start time
-            if arrival_time > self.l[task]:
-                return False, {}
-
-            # Service start time (exactly at earliest start time since we know arrival times are fixed)
-            service_start = max(arrival_time, self.e[task])
-            task_times[task] = service_start
-
-            # Complete service
-            service_end = service_start + self.s[task]
-
-            # Update current state
-            current_time = service_end
-            current_location = task
-
-        # Travel back to end depot
-        travel_time = self.c[k, current_location, "end"]
-        end_time = current_time + travel_time
-
-        # Calculate total duration
-        total_duration = end_time  # Since we start at time 0
-
-        return True, {"duration": total_duration, "task_times": task_times}
-
-    def _extract_arrival_times(self):
-        """
-        Extract arrival times from the solution.
-
-        Returns:
-            Dictionary mapping caregivers to arrival times at each location
-        """
-        self.arrivals = {}
-
-        # Initialize arrival times dictionary
-        for k in self.K:
-            self.arrivals[k] = {}
-
-        # Extract selected routes
-        if self.model.status == GRB.OPTIMAL or self.model.status == GRB.TIME_LIMIT:
-            for r in range(len(self.routes_pool)):
-                if self.lambda_vars[r].X > 0.5:  # If route is selected
-                    k = self.route_caregivers[r]
-                    route_sequence = self.routes_pool[r]
-                    task_sequence = self.route_tasks[r]
-
-                    # Simulate the route execution to get arrival times
-                    current_location = "start"
-                    current_time = 0
-
-                    # Record start time
-                    self.arrivals[k]["start"] = current_time
-
-                    # Process each task
-                    for task in task_sequence:
-                        # Travel time to task
-                        travel_time = self.c[k, current_location, task]
-                        arrival_time = current_time + travel_time
-
-                        # Service start time
-                        service_start = max(arrival_time, self.e[task])
-                        self.arrivals[k][task] = service_start
-
-                        # Update current state
-                        current_time = service_start + self.s[task]
-                        current_location = task
-
-                    # Record end time
-                    travel_time = self.c[k, current_location, "end"]
-                    end_time = current_time + travel_time
-                    self.arrivals[k]["end"] = end_time
-
-        return self.arrivals
+            self.routes[k] = [("start", tasks[0])]
+            for i in range(len(tasks) - 1):
+                self.routes[k].append((tasks[i], tasks[i + 1]))
+            self.routes[k].append((tasks[-1], "end"))
+        return self.routes

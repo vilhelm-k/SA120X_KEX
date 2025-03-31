@@ -45,8 +45,9 @@ class BaseModel(ABC):
         self.s = {i: self.tasks.loc[i, "duration_minutes"] for i in self.V}  # s[i] Service time for i
         self.e = {i: self.tasks.loc[i, "start_minutes"] for i in self.V}  # e[i] Earliest start time for i
         self.l = {i: self.tasks.loc[i, "end_minutes"] for i in self.V}  # l[i] Latest end time for
-        self.caregiver_tasks = self.__determine_qualified_tasks()  # Qualified tasks for each caregiver
+        self.Vk = self.__determine_qualified_tasks()  # Qualified tasks for each caregiver
         self.Vc = self.__determine_client_tasks()  # Tasks for each client
+        self.A = self.__determine_pair_feasibility()
         self.H = {(k, c): 0 for k in self.K for c in self.C}  # H[k,i] represents if k has visited i historically
 
         # Model variables
@@ -57,6 +58,19 @@ class BaseModel(ABC):
         # Postprocessed results
         self.routes = None
         self.arrivals = None
+
+    def __determine_pair_feasibility(self):
+        """
+        Determine infeasible task pairs based on time constraints.
+        """
+        pair_feasibility = {}
+        for k in self.K:
+            for i in self.V:
+                for j in self.V:
+                    if j < i:
+                        first, last = (i, j) if self.e[i] < self.e[j] else (j, i)
+                        pair_feasibility[k, first, last] = self.e[last] >= self.l[first] + self.c[k, first, last]
+        return pair_feasibility
 
     def __determine_client_tasks(self):
         """
@@ -126,11 +140,9 @@ class BaseModel(ABC):
         Determine feasible breaks for each caregiver based on their schedule.
         """
         breaks = {}
-        for k in self.K:
-            for i in self.V:
-                for j in self.V:
-                    if i != j:
-                        breaks[k, i, j] = 1 if self.e[j] > self.l[i] + self.c[k, i, j] + break_length else 0
+        for k, i, j in self.A:
+            if self.A[k, i, j]:
+                breaks[k, i, j] = self.e[j] - self.l[i] - self.c[k, i, j] >= break_length
         return breaks
 
     # Model building
@@ -191,36 +203,28 @@ class BaseModel(ABC):
             raise ValueError(f"Unknown endpoint: {endpoint}")
 
     # Postprocessing
-    def __extract_routes(self):
+    @abstractmethod
+    def _extract_routes(self):
         """
         Extracts the ordered route into a dictionary for each caregiver.
         """
-        # First pass: build adjacency lists for each caregiver
-        adjacency = {k: {} for k in self.K}
+        pass
 
-        for k, i, j in self.x:
-            if self.x[k, i, j].X > 0.5:
-                adjacency[k][i] = j
-
-        # Second pass: traverse adjacency lists to build ordered routes
-        routes = {k: [] for k in self.K}
-
-        for k in self.K:
-            current = "start"
-            while current in adjacency[k] and current != "end":
-                next_node = adjacency[k][current]
-                routes[k].append((current, next_node))
-                current = next_node
-
-        self.routes = routes
-        return routes
-
-    @abstractmethod
     def _extract_arrival_times(self):
         """
-        Extracts the arrival times at each task for each caregiver.
+        Extract the arrival times at each task for each caregiver.
         """
-        pass
+        self.arrivals = {}
+        for k in self.K:
+            self.arrivals[k] = {}
+            self.arrivals[k]["start"] = self.S[k].X
+            self.arrivals[k]["end"] = self.E[k].X
+
+            for _, j in self.routes[k]:
+                if j == "end":
+                    continue
+                self.arrivals[k][j] = self.e[j]
+        return self.arrivals
 
     def get_solution(self):
         """
@@ -231,6 +235,6 @@ class BaseModel(ABC):
             raise ValueError("Model must be optimized before extracting the solution")
         if self.model.Status != GRB.OPTIMAL:
             print(f"Model not optimally solved. Status: {self.model.Status}")
-        self.__extract_routes()
+        self._extract_routes()
         self._extract_arrival_times()
         return self.routes, self.arrivals
