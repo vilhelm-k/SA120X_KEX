@@ -3,7 +3,7 @@ from gurobipy import GRB
 from .base_model import BaseModel
 
 
-class FixedModel(BaseModel):
+class TSPModel(BaseModel):
     def build(
         self,
         overtime_penalty=1.5,
@@ -11,15 +11,15 @@ class FixedModel(BaseModel):
         worktime_per_break=5 * 60,
         regular_hours=8 * 60,
         break_length=30,
-        continuity_penalty=30,
+        continuity_penalty=5,
     ):
         # ---- Base Model Construction ----
         self.model = gp.Model("HomeCare")
 
         # Base variables
         self.x = {}  # Route variables
-        self.E = {}  # End time variables
-        self.S = {}  # Start time variables
+        self.w = {}  # Weights incorporating service times and waiting times, measured end to end.
+        self.T = {}  # Total time variables
         self.is_used = {}  # Caregiver usage variables
 
         # Create base decision variables
@@ -28,19 +28,21 @@ class FixedModel(BaseModel):
             for i in self.V:
                 # Routes between tasks and start/end
                 self.x[k, "start", i] = self.model.addVar(vtype=GRB.BINARY, name=f"x^{k}_start_{i}")
+                self.w[k, "start", i] = self.c(k, "start", i) + self.s[i]
                 self.x[k, i, "end"] = self.model.addVar(vtype=GRB.BINARY, name=f"x^{k}_{i}_end")
+                self.w[k, i, "end"] = self.c(k, i, "end")
 
                 # Routes between tasks
                 for j in self.V:
                     if i != j:
                         self.x[k, i, j] = self.model.addVar(vtype=GRB.BINARY, name=f"x^{k}_{i}_{j}")
-
-            # Start and end times
-            self.S[k] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"T^{k}_start")
-            self.E[k] = self.model.addVar(vtype=GRB.CONTINUOUS, name=f"T^{k}_end")
+                        self.w[k, i, j] = self.l[j] - self.l[i]
 
             # Caregiver usage
             self.is_used[k] = self.model.addVar(vtype=GRB.BINARY, name=f"is_used_{k}")
+
+            # Total time
+            self.T[k] = self.model.addVar(vtype=GRB.CONTINUOUS, lb=0, name=f"T_{k}")
 
         print("Created base variables.")
 
@@ -95,22 +97,20 @@ class FixedModel(BaseModel):
             name="TemporalInfeasibility",
         )
 
-        # Start and end time definitions
+        # Define total time for each caregiver
         for k in self.K:
             self.model.addConstr(
-                self.S[k] <= gp.quicksum(self.x[k, "start", i] * (self.e[i] - self.c(k, "start", i)) for i in self.V),
-                name=f"StartTime[{k}]",
+                self.T[k]
+                >= gp.quicksum(self.w[k, i, j] * self.x[k, i, j] for i in self.V for j in self.V if i != j)
+                + gp.quicksum(
+                    self.w[k, "start", i] * self.x[k, "start", i] + self.w[k, i, "end"] * self.x[k, i, "end"]
+                    for i in self.V
+                ),
+                name=f"TotalTime[{k}]",
             )
-            self.model.addConstr(
-                self.E[k] >= gp.quicksum(self.x[k, i, "end"] * (self.l[i] + self.c(k, i, "end")) for i in self.V),
-                name=f"EndTime[{k}]",
-            )
-
-            # Start time before end time (basic temporal constraint)
-            self.model.addConstr(self.E[k] >= self.S[k], name=f"StartBeforeEnd[{k}]")
 
         # Base objective: minimize total time
-        base_objective = gp.quicksum(self.E[k] - self.S[k] for k in self.K)
+        base_objective = gp.quicksum(self.T[k] for k in self.K)
         self.model.setObjective(base_objective, GRB.MINIMIZE)
 
         print("Built base model.")
@@ -129,7 +129,7 @@ class FixedModel(BaseModel):
 
                 # Overtime calculation constraint
                 self.model.addConstr(
-                    self.overtime[k] >= self.E[k] - self.S[k] - regular_hours,
+                    self.overtime[k] >= self.T[k] - regular_hours,
                     name=f"OvertimeCalculation[{k}]",
                 )
 
@@ -157,7 +157,7 @@ class FixedModel(BaseModel):
             for k in self.K:
                 # One break for every worktime_per_break minutes of work
                 self.model.addConstr(
-                    gp.quicksum(self.B[k, i] for i in self.V) >= (self.E[k] - self.S[k]) / worktime_per_break - 1,
+                    gp.quicksum(self.B[k, i] for i in self.V) >= (self.T[k]) / worktime_per_break - 1,
                     name=f"BreakRequired[{k}]",
                 )
 
@@ -230,3 +230,24 @@ class FixedModel(BaseModel):
 
         self.routes = routes
         return routes
+
+    def _extract_arrival_times(self):
+        """
+        Extract the arrival times at each task for each caregiver.
+        """
+        self.arrivals = {}
+        for k in self.K:
+            self.arrivals[k] = {}
+            routes = self.routes[k]
+            if not routes:
+                continue
+            first_task = routes[0][1]
+            last_task = routes[-1][0]
+            self.arrivals[k]["start"] = self.e[first_task] - self.c(k, "start", first_task)
+            self.arrivals[k]["end"] = self.l[last_task] + self.c(k, last_task, "end")
+
+            for _, j in self.routes[k]:
+                if j == "end":
+                    continue
+                self.arrivals[k][j] = self.e[j]
+        return self.arrivals

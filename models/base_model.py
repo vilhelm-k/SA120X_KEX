@@ -41,7 +41,6 @@ class BaseModel(ABC):
         self.K = self.caregivers.index.tolist()
         self.V = self.tasks.index.tolist()
         self.C = self.clients.index.tolist()
-        self.c = self.__calculate_travel_times()  # c[k,i,j] Travel time for k from i to j
         self.s = {i: self.tasks.loc[i, "duration_minutes"] for i in self.V}  # s[i] Service time for i
         self.e = {i: self.tasks.loc[i, "start_minutes"] for i in self.V}  # e[i] Earliest start time for i
         self.l = {i: self.tasks.loc[i, "end_minutes"] for i in self.V}  # l[i] Latest end time for
@@ -69,8 +68,31 @@ class BaseModel(ABC):
                 for j in self.V:
                     if j < i:
                         first, last = (i, j) if self.e[i] < self.e[j] else (j, i)
-                        pair_feasibility[k, first, last] = self.e[last] >= self.l[first] + self.c[k, first, last]
+                        pair_feasibility[k, first, last] = self.e[last] >= self.l[first] + self.c(k, first, last)
         return pair_feasibility
+
+    def c(self, k, i, j):
+        mode_of_transport = self.caregivers.loc[k, "ModeOfTransport"]
+        match mode_of_transport:
+            case "car":
+                time_matrix = self.drive_time_matrix
+            case "pedestrian":
+                time_matrix = self.walk_time_matrix
+            case "bicycle":
+                time_matrix = self.bicycle_time_matrix
+            case _:
+                raise ValueError(f"Unknown mode of transport: {mode_of_transport}")
+
+        if i in self.V and j in self.V:
+            return time_matrix.loc[self.get_location(i), self.get_location(j)]
+        elif i in self.V and j == "end":
+            end_location = self.get_endpoint(k, "end")
+            return 0 if end_location == "Home" else time_matrix.loc[self.get_location(i), 0]
+        elif i == "start" and j in self.V:
+            start_location = self.get_endpoint(k, "start")
+            return 0 if start_location == "Home" else time_matrix.loc[0, self.get_location(j)]
+        else:
+            raise ValueError(f"Invalid task locations: {i}, {j}")
 
     def __determine_client_tasks(self):
         """
@@ -80,44 +102,6 @@ class BaseModel(ABC):
         for c in self.C:
             client_tasks[c] = self.tasks[self.tasks["ClientID"] == c].index.tolist()
         return client_tasks
-
-    def __calculate_travel_times(self):
-        """
-        Calculate the travel times between locations for each caregiver and task.
-        Handles special nodes (start, end, break) with appropriate travel times.
-        """
-        c = {}
-
-        for k in self.K:
-            mode_of_transport = self.caregivers.loc[k, "ModeOfTransport"]
-            match mode_of_transport:
-                case "car":
-                    time_matrix = self.drive_time_matrix
-                case "pedestrian":
-                    time_matrix = self.walk_time_matrix
-                case "bicycle":
-                    time_matrix = self.bicycle_time_matrix
-                case _:
-                    raise ValueError(f"Unknown mode of transport: {mode_of_transport}")
-
-            # Get endpoints for this caregiver
-            start_location = self.get_endpoint(k, "start")
-            end_location = self.get_endpoint(k, "end")
-            start_at_home = start_location == "Home"
-            end_at_home = end_location == "Home"
-
-            # Process all task pairs
-            for i in self.V:
-                # To special nodes
-                c[k, i, "end"] = 0 if end_at_home else time_matrix.loc[self.get_location(i), 0]
-                c[k, "start", i] = 0 if start_at_home else time_matrix.loc[0, self.get_location(i)]
-                c[k, i, "break"] = 0
-                c[k, "break", i] = 0
-                # Between tasks
-                for j in self.V:
-                    if i != j:
-                        c[k, i, j] = time_matrix.loc[self.get_location(i), self.get_location(j)]
-        return c
 
     def __determine_qualified_tasks(self):
         """
@@ -203,7 +187,6 @@ class BaseModel(ABC):
             raise ValueError(f"Unknown endpoint: {endpoint}")
 
     # Postprocessing
-    @abstractmethod
     def _extract_routes(self):
         """
         Extracts the ordered route into a dictionary for each caregiver.
