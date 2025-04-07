@@ -66,13 +66,13 @@ class PartitionModel(BaseModel):
                 self.model.addGenConstrIndicator(
                     self.x[k, i],
                     True,
-                    self.S[k] <= self.e[i] - self.c[k, "start", i],
+                    self.S[k] <= self.e[i] - self.c(k, "start", i),
                     name=f"StartTime[{k},{i}]",
                 )
                 self.model.addGenConstrIndicator(
                     self.x[k, i],
                     True,
-                    self.E[k] >= self.l[i] + self.c[k, i, "end"],
+                    self.E[k] >= self.l[i] + self.c(k, i, "end"),
                     name=f"EndTime[{k},{i}]",
                 )
         print("Built base model.")

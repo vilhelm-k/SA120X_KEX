@@ -126,7 +126,7 @@ class BaseModel(ABC):
         breaks = {}
         for k, i, j in self.A:
             if self.A[k, i, j]:
-                breaks[k, i, j] = self.e[j] - self.l[i] - self.c[k, i, j] >= break_length
+                breaks[k, i, j] = self.e[j] - self.l[i] - self.c(k, i, j) >= break_length
         return breaks
 
     # Model building
