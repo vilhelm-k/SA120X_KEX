@@ -1,7 +1,93 @@
 import json
 import pickle
 import datetime
+import numpy as np
 from pathlib import Path
+
+
+def create_model_from_real_data(
+    caregivers, tasks, clients, drive_time_matrix, walk_time_matrix, bicycle_time_matrix, continuity=None
+):
+    """
+    Create a model structure from real-world data (actual routes/assignments) for analysis
+    without running the optimization.
+
+    Args:
+        caregivers (pd.DataFrame): DataFrame containing caregiver information
+        tasks (pd.DataFrame): DataFrame containing task information, must have 'PlannedCaregiverID' column
+        clients (pd.DataFrame): DataFrame containing client information
+        drive_time_matrix (pd.DataFrame): Matrix of travel times for driving
+        walk_time_matrix (pd.DataFrame): Matrix of travel times for walking
+        bicycle_time_matrix (pd.DataFrame): Matrix of travel times for bicycling
+        continuity (pd.DataFrame, optional): Historical continuity information
+
+    Returns:
+        model: A model object that can be used with metrics and visualization functions
+    """
+    from models.base_model import BaseModel
+
+    class RealDataModel(BaseModel):
+        def build(self):
+            # Minimal implementation to satisfy inheritance
+            pass
+
+    # Create a model instance with the provided data
+    model = RealDataModel(
+        caregivers, tasks, clients, drive_time_matrix, walk_time_matrix, bicycle_time_matrix, continuity
+    )
+
+    # Extract unique caregivers from tasks
+    # Make sure we only use caregivers that are in our caregivers DataFrame
+    assigned_caregivers = set(tasks["PlannedCaregiverID"].dropna()).intersection(set(caregivers.index))
+    K = list(assigned_caregivers)
+
+    # Initialize routes and arrivals dictionaries
+    model.routes = {k: [] for k in model.K}
+    model.arrivals = {k: {} for k in model.K}
+
+    # Group tasks by assigned caregiver
+    for k in K:
+        # Get all tasks for this caregiver sorted by start time
+        caregiver_tasks = tasks[tasks["PlannedCaregiverID"] == k].sort_values("start_minutes")
+
+        if caregiver_tasks.empty:
+            continue
+
+        # Set start and end times
+        first_task = caregiver_tasks.iloc[0].name
+        last_task = caregiver_tasks.iloc[-1].name
+        model.arrivals[k]["start"] = model.e[first_task] - model.c(k, "start", first_task)
+        model.arrivals[k]["end"] = model.l[last_task] + model.c(k, last_task, "end")
+
+        # For each task, add an entry in the route
+        prev_task = "start"
+        for idx, task in caregiver_tasks.iterrows():
+            # Add this leg of the route (prev_task -> current_task)
+            model.routes[k].append((prev_task, idx))
+
+            # Record arrival time (use the planned start time)
+            model.arrivals[k][idx] = task["start_minutes"]
+
+            if prev_task != "start":
+                cheating = model.e[idx] - model.l[prev_task] - model.c(k, prev_task, idx)
+                if cheating < 0:
+                    print(f"Caregiver {k} is cheating by {cheating} minutes between {prev_task} and {idx}")
+
+            # Update previous task
+            prev_task = idx
+
+        # Add the final leg back to end
+        model.routes[k].append((prev_task, "end"))
+
+    # Add a dummy optimization model with an objective value for metrics
+    class DummyModel:
+        def __init__(self):
+            self.objVal = 0
+            self.Status = 1  # Optimal status code
+
+    model.model = DummyModel()
+
+    return model
 
 
 def save_solution(model, name=None, format="json"):

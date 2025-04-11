@@ -290,6 +290,6 @@ class BaseModel(ABC):
             print(f"Model not optimally solved. Status: {self.model.Status}")
         self._extract_routes()
         self._extract_arrival_times()
-        if self.B is not None:
+        if hasattr(self, "B"):
             self._extract_breaks()
         return self.routes, self.arrivals, self.breaks

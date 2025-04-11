@@ -13,6 +13,7 @@ class FixedModel(BaseModel):
         break_length=30,
         continuity_penalty=45,
         day_continuity_penalty=10,
+        lateness_penalty=10,
     ):
         # ---- Base Model Construction ----
         self.model = gp.Model("HomeCare")
@@ -83,18 +84,24 @@ class FixedModel(BaseModel):
             name="Qualification",
         )
 
-        # Temporally infeasible tasks are not visited
-        self.model.addConstr(
-            gp.quicksum(
-                self.x[k, i, j]
-                for k in self.K
-                for j in self.V
-                for i in self.V
-                if i != j and self.e[j] < self.l[i] + self.c(k, i, j)
-            )
-            == 0,
-            name="TemporalInfeasibility",
-        )
+        # Temporal feasibility constraint with slack variables
+        self.temporal_slack = {}
+        for k in self.K:
+            for i in self.V:
+                for j in self.V:
+                    if i != j:
+                        # Create slack variable for temporal constraint
+                        self.temporal_slack[k, i, j] = self.model.addVar(
+                            vtype=GRB.CONTINUOUS, lb=0, name=f"temporal_slack_{k}_{i}_{j}"
+                        )
+
+                        # Slackened constraint: arrival time at j can be earlier than departure from i plus travel time
+                        # but we penalize this violation in the objective function
+                        self.model.addConstr(
+                            self.x[k, i, j] * (self.e[j] - self.l[i] - self.c(k, i, j) + self.temporal_slack[k, i, j])
+                            >= 0,
+                            name=f"TemporalFeasibility[{k},{i},{j}]",
+                        )
 
         # Start and end time definitions
         for k in self.K:
@@ -111,7 +118,9 @@ class FixedModel(BaseModel):
             self.model.addConstr(self.E[k] >= self.S[k], name=f"StartBeforeEnd[{k}]")
 
         # Base objective: minimize total time
-        base_objective = gp.quicksum(self.E[k] - self.S[k] for k in self.K)
+        base_objective = gp.quicksum(self.E[k] - self.S[k] for k in self.K) + lateness_penalty * gp.quicksum(
+            self.temporal_slack[k, i, j] for k in self.K for i in self.V for j in self.V if i != j
+        )
         self.model.setObjective(base_objective, GRB.MINIMIZE)
 
         print("Built base model.")
