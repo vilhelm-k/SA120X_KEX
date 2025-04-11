@@ -19,8 +19,8 @@ def calculate_metrics(model):
     # Calculate individual caregiver metrics
     caregiver_metrics = calculate_caregiver_metrics(model)
 
-    # Calculate aggregate metrics
-    aggregate_metrics = calculate_aggregate_metrics(caregiver_metrics)
+    # Calculate aggregate metrics (now passing the model directly)
+    aggregate_metrics = calculate_aggregate_metrics(caregiver_metrics, model)
 
     # Combine all metrics into a single dictionary
     return {"caregiver_metrics": caregiver_metrics, "aggregate_metrics": aggregate_metrics}
@@ -38,9 +38,11 @@ def calculate_caregiver_metrics(model):
     """
     routes = model.routes
     arrivals = model.arrivals
-    travel_times = model.c
     service_times = model.s
     tasks = model.tasks
+
+    # Check if breaks exist in the model
+    has_breaks = hasattr(model, "breaks") and model.breaks is not None
 
     caregiver_metrics = {}
 
@@ -51,10 +53,11 @@ def calculate_caregiver_metrics(model):
                 "travel_time": 0,
                 "service_time": 0,
                 "waiting_time": 0,
+                "break_time": 0,
                 "total_time": 0,
                 "utilization": 0,
                 "number_of_tasks": 0,
-                "proportions": {"travel": 0, "service": 0, "waiting": 0},
+                "proportions": {"travel": 0, "service": 0, "waiting": 0, "break": 0},
             }
             continue
 
@@ -62,6 +65,7 @@ def calculate_caregiver_metrics(model):
         travel_time = 0
         service_time = 0
         waiting_time = 0
+        break_time = 0
         task_count = 0
 
         # Use the same time-sequential approach as in visualize_schedule
@@ -85,8 +89,15 @@ def calculate_caregiver_metrics(model):
                 task_count += 1
                 current_time += task_duration
 
+                # Add break time if this task is followed by a break
+                if has_breaks and k in model.breaks and i in model.breaks[k]:
+                    # Standard break duration (30 minutes by default)
+                    break_duration = 30  # This could be adjusted based on model parameters
+                    break_time += break_duration
+                    current_time += break_duration
+
             # Add travel time to the next location
-            travel_duration = travel_times[k, i, j]
+            travel_duration = model.c(k, i, j)
             travel_time += travel_duration
             current_time += travel_duration
 
@@ -101,21 +112,25 @@ def calculate_caregiver_metrics(model):
             "travel": (travel_time / total_time * 100) if total_time > 0 else 0,
             "service": (service_time / total_time * 100) if total_time > 0 else 0,
             "waiting": (waiting_time / total_time * 100) if total_time > 0 else 0,
+            "break": (break_time / total_time * 100) if total_time > 0 else 0,
         }
 
         # Verify that time accounting adds up
-        accounted_time = service_time + travel_time + waiting_time
+        accounted_time = service_time + travel_time + waiting_time + break_time
         time_diff = abs(total_time - accounted_time)
         if time_diff > 1:  # Tolerance of 1 minute due to potential floating point issues
             print(f"Warning: Caregiver {k} has a time accounting discrepancy of {time_diff:.2f} minutes")
             print(f"  Total time: {total_time:.2f}, Accounted time: {accounted_time:.2f}")
-            print(f"  Service: {service_time:.2f}, Travel: {travel_time:.2f}, Waiting: {waiting_time:.2f}")
+            print(
+                f"  Service: {service_time:.2f}, Travel: {travel_time:.2f}, Waiting: {waiting_time:.2f}, Break: {break_time:.2f}"
+            )
 
         # Store metrics for this caregiver
         caregiver_metrics[k] = {
             "travel_time": travel_time,
             "service_time": service_time,
             "waiting_time": waiting_time,
+            "break_time": break_time,
             "total_time": total_time,
             "utilization": utilization,
             "number_of_tasks": task_count,
@@ -125,12 +140,13 @@ def calculate_caregiver_metrics(model):
     return caregiver_metrics
 
 
-def calculate_aggregate_metrics(caregiver_metrics):
+def calculate_aggregate_metrics(caregiver_metrics, model):
     """
-    Calculate aggregate metrics across all caregivers.
+    Calculate aggregate metrics across all caregivers and clients.
 
     Parameters:
     - caregiver_metrics: Dictionary of individual caregiver metrics
+    - model: A solved optimization model instance for accessing continuity data
 
     Returns:
     - A dictionary containing aggregate metrics
@@ -139,6 +155,7 @@ def calculate_aggregate_metrics(caregiver_metrics):
     travel_times = [metrics["travel_time"] for metrics in caregiver_metrics.values()]
     service_times = [metrics["service_time"] for metrics in caregiver_metrics.values()]
     waiting_times = [metrics["waiting_time"] for metrics in caregiver_metrics.values()]
+    break_times = [metrics["break_time"] for metrics in caregiver_metrics.values()]
     total_times = [metrics["total_time"] for metrics in caregiver_metrics.values()]
     utilizations = [metrics["utilization"] for metrics in caregiver_metrics.values()]
     task_counts = [metrics["number_of_tasks"] for metrics in caregiver_metrics.values()]
@@ -147,6 +164,7 @@ def calculate_aggregate_metrics(caregiver_metrics):
     total_travel_time = sum(travel_times)
     total_service_time = sum(service_times)
     total_waiting_time = sum(waiting_times)
+    total_break_time = sum(break_times)
     total_schedule_time = sum(total_times)
     total_tasks = sum(task_counts)
 
@@ -157,6 +175,7 @@ def calculate_aggregate_metrics(caregiver_metrics):
     avg_travel_time = total_travel_time / num_active_caregivers if num_active_caregivers > 0 else 0
     avg_service_time = total_service_time / num_active_caregivers if num_active_caregivers > 0 else 0
     avg_waiting_time = total_waiting_time / num_active_caregivers if num_active_caregivers > 0 else 0
+    avg_break_time = total_break_time / num_active_caregivers if num_active_caregivers > 0 else 0
     avg_schedule_time = total_schedule_time / num_active_caregivers if num_active_caregivers > 0 else 0
     avg_utilization = total_service_time / total_schedule_time * 100 if total_schedule_time > 0 else 0
     avg_tasks_per_caregiver = total_tasks / num_active_caregivers if num_active_caregivers > 0 else 0
@@ -166,7 +185,11 @@ def calculate_aggregate_metrics(caregiver_metrics):
         "travel": (total_travel_time / total_schedule_time * 100) if total_schedule_time > 0 else 0,
         "service": (total_service_time / total_schedule_time * 100) if total_schedule_time > 0 else 0,
         "waiting": (total_waiting_time / total_schedule_time * 100) if total_schedule_time > 0 else 0,
+        "break": (total_break_time / total_schedule_time * 100) if total_schedule_time > 0 else 0,
     }
+
+    # ---- Calculate continuity metrics ----
+    continuity_metrics = calculate_continuity_metrics(model)
 
     # Compile aggregate metrics
     aggregate_metrics = {
@@ -174,6 +197,7 @@ def calculate_aggregate_metrics(caregiver_metrics):
             "travel_time": total_travel_time,
             "service_time": total_service_time,
             "waiting_time": total_waiting_time,
+            "break_time": total_break_time,
             "schedule_time": total_schedule_time,
             "number_of_tasks": total_tasks,
         },
@@ -181,6 +205,7 @@ def calculate_aggregate_metrics(caregiver_metrics):
             "travel_time": avg_travel_time,
             "service_time": avg_service_time,
             "waiting_time": avg_waiting_time,
+            "break_time": avg_break_time,
             "schedule_time": avg_schedule_time,
             "utilization": avg_utilization,
             "tasks_per_caregiver": avg_tasks_per_caregiver,
@@ -188,6 +213,103 @@ def calculate_aggregate_metrics(caregiver_metrics):
         "proportions": global_proportions,
         "active_caregivers": num_active_caregivers,
         "total_caregivers": len(caregiver_metrics),
+        "continuity": continuity_metrics,
     }
 
     return aggregate_metrics
+
+
+def calculate_continuity_metrics(model):
+    """
+    Calculate continuity metrics for each client.
+
+    Parameters:
+    - model: A solved optimization model instance
+
+    Returns:
+    - A dictionary containing continuity metrics for each client and system-wide metrics
+    """
+    # Extract model data
+    routes = model.routes
+    H = model.H  # Historical continuity data
+    C = model.C  # List of clients
+    Vc = model.Vc  # Tasks for each client
+
+    # Map each task to its assigned caregiver
+    task_caregiver_map = {}
+    for k, route in routes.items():
+        for i, j in route:
+            if i != "start":  # We only care about actual tasks
+                task_caregiver_map[i] = k
+
+    # Calculate client-specific continuity metrics
+    client_continuity = {}
+    for c in C:
+        client_tasks = Vc[c]
+        total_tasks = len(client_tasks)
+
+        # Skip clients with no tasks
+        if total_tasks == 0:
+            continue
+
+        # Identify caregivers assigned to this client's tasks
+        caregivers_today = {}
+        for task_id in client_tasks:
+            if task_id in task_caregiver_map:
+                k = task_caregiver_map[task_id]
+                caregivers_today[k] = caregivers_today.get(k, 0) + 1
+
+        # Calculate historical continuity
+        historical_caregivers = [k for k in model.K if H[k, c] == 1]
+        assigned_historical = [k for k in caregivers_today if H[k, c] == 1]
+
+        unique_caregivers = len(caregivers_today)
+        historical_tasks = sum(caregivers_today.get(k, 0) for k in historical_caregivers)
+
+        # Calculate continuity score
+        historical_continuity_score = 0
+        if unique_caregivers > 0:
+            historical_continuity_score = (len(assigned_historical) / unique_caregivers) * 100
+
+        # Store metrics for this client
+        client_continuity[c] = {
+            "unique_caregivers": unique_caregivers,
+            "total_tasks": total_tasks,
+            "tasks_per_caregiver": total_tasks / unique_caregivers if unique_caregivers else 0,
+            "historical_caregivers_count": len(historical_caregivers),
+            "assigned_historical_caregivers": len(assigned_historical),
+            "historical_continuity_score": historical_continuity_score,
+            "historical_tasks": historical_tasks,
+            "non_historical_tasks": total_tasks - historical_tasks,
+        }
+
+    # Calculate system-wide metrics using client data
+    active_clients = len(client_continuity)
+
+    # Count totals and calculate averages
+    total_unique_caregivers = sum(metrics["unique_caregivers"] for metrics in client_continuity.values())
+    total_historical_caregivers = sum(
+        metrics["assigned_historical_caregivers"] for metrics in client_continuity.values()
+    )
+    total_tasks = sum(metrics["total_tasks"] for metrics in client_continuity.values())
+    total_historical_tasks = sum(metrics["historical_tasks"] for metrics in client_continuity.values())
+
+    # Count clients with perfect continuity
+    perfect_continuity = sum(1 for metrics in client_continuity.values() if metrics["unique_caregivers"] == 1)
+    perfect_historical = sum(
+        1 for metrics in client_continuity.values() if metrics["historical_continuity_score"] == 100
+    )
+
+    system_continuity = {
+        "avg_caregivers_per_client": total_unique_caregivers / active_clients,
+        "avg_historical_continuity": (
+            (total_historical_caregivers / total_unique_caregivers * 100) if total_unique_caregivers > 0 else 0
+        ),
+        "historical_task_percentage": (total_historical_tasks / total_tasks * 100) if total_tasks > 0 else 0,
+        "total_historical_tasks": total_historical_tasks,
+        "total_tasks": total_tasks,
+        "perfect_continuity_clients": perfect_continuity,
+        "perfect_historical_continuity_clients": perfect_historical,
+    }
+
+    return {"client_continuity": client_continuity, "system_continuity": system_continuity}

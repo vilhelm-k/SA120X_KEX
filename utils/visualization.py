@@ -10,7 +10,7 @@ from utils.metrics import calculate_metrics
 def visualize_schedule(model):
     """
     Create a home care schedule visualization using Matplotlib.
-    Shows each caregiver's route with indices for tasks.
+    Shows each caregiver's route with indices for tasks and highlights breaks.
 
     Parameters:
     - model: A solved optimization model instance
@@ -25,8 +25,10 @@ def visualize_schedule(model):
     # Extract data from the model
     routes = model.routes
     arrivals = model.arrivals
-    travel_times = model.c
     service_times = model.s
+    
+    # Check if breaks exist in the model
+    has_breaks = hasattr(model, 'breaks') and model.breaks is not None
 
     # Create schedule data for visualization
     schedule_data = []
@@ -69,9 +71,25 @@ def visualize_schedule(model):
                     }
                 )
                 current_time += task_duration
+                
+                # Add break if this task is followed by a break
+                if has_breaks and k in model.breaks and i in model.breaks[k]:
+                    # Assume break is 30 minutes (or adjust as needed)
+                    break_duration = 30  # This could be parametrized or determined from model
+                    schedule_data.append(
+                        {
+                            "Caregiver": k,
+                            "Activity": "Break",
+                            "Index": None,
+                            "Start": current_time,
+                            "Duration": break_duration,
+                            "Color": "lightgreen",
+                        }
+                    )
+                    current_time += break_duration
 
             # Travel
-            travel_duration = travel_times[k, i, j]
+            travel_duration = model.c(k, i, j)
             schedule_data.append(
                 {
                     "Caregiver": k,
@@ -107,7 +125,7 @@ def visualize_schedule(model):
 
     # Calculate figure dimensions
     num_caregivers = len([k for k in routes if routes[k]])
-    fig_height = max(8, num_caregivers * 1.5)
+    fig_height = max(6, num_caregivers * 0.8)  # Half the height per caregiver
 
     # Create figure and axis
     fig, ax = plt.subplots(figsize=(15, fig_height))
@@ -125,12 +143,13 @@ def visualize_schedule(model):
         x_start = row["Start"]
         width = row["Duration"]
 
+        # Make the rectangles half as tall (0.4 -> 0.2) but keep same spacing
         rect = patches.Rectangle(
             (x_start, y_pos - 0.4), width, 0.8, linewidth=1, edgecolor="black", facecolor=row["Color"], alpha=0.7
         )
         ax.add_patch(rect)
 
-        # Add text labels for tasks
+        # Add text labels for tasks (not for breaks)
         if "Task" in row["Activity"]:
             # Determine what text to display based on width
             if width >= 40:
@@ -147,14 +166,15 @@ def visualize_schedule(model):
                 label,
                 ha="center",
                 va="center",
-                fontsize=9,
+                fontsize=8,  # Slightly smaller font for smaller rectangles
                 fontweight="bold",
             )
+        # No longer adding text for breaks
 
     # Set up the axis
     ax.set_yticks(list(y_positions.values()))
     ax.set_yticklabels(
-        [f"Caregiver {cg}\n {model.caregivers.loc[cg, "ModeOfTransport"]}" for cg in y_positions.keys()]
+        [f"Caregiver {cg}\n {model.caregivers.loc[cg, 'ModeOfTransport']}" for cg in y_positions.keys()]
     )
     ax.set_ylim(-0.5, len(y_positions) - 0.5)
 
@@ -176,10 +196,73 @@ def visualize_schedule(model):
         patches.Patch(facecolor="orange", edgecolor="black", alpha=0.7, label="Travel"),
         patches.Patch(facecolor="lightgray", edgecolor="black", alpha=0.7, label="Waiting"),
     ]
+    
+    # Add break to legend if breaks exist
+    if has_breaks:
+        legend_elements.append(
+            patches.Patch(facecolor="lightgreen", edgecolor="black", alpha=0.7, label="Break")
+        )
+        
     ax.legend(handles=legend_elements, loc="upper right")
 
     plt.tight_layout()
     return fig
+
+
+def display_metrics_summary(model):
+    """
+    Display a summary of the most relevant metrics as a formatted table.
+    
+    Parameters:
+    - model: A solved optimization model instance
+    
+    Returns:
+    - None (prints the summary table to the console)
+    """
+    # Calculate metrics
+    metrics = calculate_metrics(model)
+    aggregate_metrics = metrics["aggregate_metrics"]
+    agg = aggregate_metrics
+    continuity = aggregate_metrics["continuity"]["system_continuity"]
+    
+    # Create summary table with formatting
+    print("\n" + "="*80)
+    print(" "*30 + "HOME CARE SCHEDULE METRICS SUMMARY")
+    print("="*80)
+    
+    # Basic metrics
+    print("\nSCHEDULE OVERVIEW:")
+    print(f"  Total tasks:              {agg['total']['number_of_tasks']}")
+    print(f"  Active caregivers:        {agg['active_caregivers']}/{agg['total_caregivers']}")
+    
+    # Time allocation
+    print("\nTIME ALLOCATION:")
+    print(f"  Service time:             {agg['total']['service_time']:.0f} min ({agg['proportions']['service']:.1f}%)")
+    print(f"  Travel time:              {agg['total']['travel_time']:.0f} min ({agg['proportions']['travel']:.1f}%)")
+    print(f"  Waiting time:             {agg['total']['waiting_time']:.0f} min ({agg['proportions']['waiting']:.1f}%)")
+    print(f"  Break time:               {agg['total']['break_time']:.0f} min ({agg['proportions']['break']:.1f}%)")
+    print(f"  Total schedule time:      {agg['total']['schedule_time']:.0f} min")
+    
+    # Continuity metrics
+    print("\nCONTINUITY METRICS:")
+    print(f"  Historical visits:        {continuity['total_historical_tasks']}/{continuity['total_tasks']} ({continuity['historical_task_percentage']:.1f}%)")
+    print(f"  Avg caregivers per client: {continuity['avg_caregivers_per_client']:.1f}")
+    print(f"  Historical continuity:    {continuity['avg_historical_continuity']:.1f}%")
+    print(f"  Perfect continuity:       {continuity['perfect_continuity_clients']} clients")
+    print(f"  Perfect historical:       {continuity['perfect_historical_continuity_clients']} clients")
+    
+    # Average caregiver stats
+    print("\nAVERAGE PER CAREGIVER:")
+    print(f"  Tasks:                    {agg['average']['tasks_per_caregiver']:.1f}")
+    print(f"  Service time:             {agg['average']['service_time']:.0f} min")
+    print(f"  Travel time:              {agg['average']['travel_time']:.0f} min")
+    print(f"  Waiting time:             {agg['average']['waiting_time']:.0f} min")
+    print(f"  Break time:               {agg['average']['break_time']:.0f} min")
+    print(f"  Utilization:              {agg['average']['utilization']:.1f}%")
+    
+    print("="*80 + "\n")
+    
+    return None
 
 
 def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10)):
@@ -197,9 +280,10 @@ def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10
 
     Returns:
     - If display_mode is 'dashboard': The dashboard figure
-    - If display_mode is 'individual': A tuple of individual figures (fig1, fig2, fig3, fig4, fig5)
-    - If display_mode is 'all' or 'none': A tuple of all figures (fig1, fig2, fig3, fig4, fig5, dashboard_fig)
+    - If display_mode is 'individual': A tuple of individual figures (fig1, fig2, fig3, fig4, fig6, fig7)
+    - If display_mode is 'all' or 'none': A tuple of all figures (fig1, fig2, fig3, fig4, fig6, fig7, dashboard_fig)
     """
+    
     # Turn off interactive mode to prevent automatic display
     was_interactive = plt.isinteractive()
     if was_interactive:
@@ -207,6 +291,7 @@ def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10
     metrics = calculate_metrics(model)
     caregiver_metrics = metrics["caregiver_metrics"]
     aggregate_metrics = metrics["aggregate_metrics"]
+    continuity_metrics = aggregate_metrics["continuity"]
 
     # Only include caregivers with assigned tasks
     active_caregivers = {k: v for k, v in caregiver_metrics.items() if v["number_of_tasks"] > 0}
@@ -219,6 +304,16 @@ def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10
     # Get list of caregivers and use consistent indices
     caregivers = list(active_caregivers.keys())
     index = np.arange(len(caregivers))  # Use numeric indices for x-axis positions
+    caregiver_labels = [str(cg) for cg in caregivers]  # Convert all caregiver IDs to strings for labels
+    
+    # Safety check - ensure lengths match
+    if len(index) != len(caregivers) or len(index) != len(caregiver_labels):
+        print(f"Warning: Mismatch in array lengths: index={len(index)}, caregivers={len(caregivers)}, labels={len(caregiver_labels)}")
+        # Try to correct by using the smallest length
+        min_len = min(len(index), len(caregivers), len(caregiver_labels))
+        index = index[:min_len]
+        caregivers = caregivers[:min_len]
+        caregiver_labels = caregiver_labels[:min_len]
 
     # 1. Time allocation bar chart
     fig1, ax1 = plt.subplots(figsize=(12, 6))
@@ -227,6 +322,7 @@ def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10
     service_times = [active_caregivers[k]["service_time"] for k in caregivers]
     travel_times = [active_caregivers[k]["travel_time"] for k in caregivers]
     waiting_times = [active_caregivers[k]["waiting_time"] for k in caregivers]
+    break_times = [active_caregivers[k]["break_time"] for k in caregivers]
 
     # Create stacked bar chart using index positions
     ax1.bar(index, service_times, label="Service Time", color="skyblue")
@@ -238,17 +334,21 @@ def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10
     # Calculate bottom for waiting times
     service_travel_bottom = [s + t for s, t in zip(service_times, travel_times)]
     ax1.bar(index, waiting_times, bottom=service_travel_bottom, label="Waiting Time", color="lightgray")
+    
+    # Add break times
+    service_travel_waiting_bottom = [s + t + w for s, t, w in zip(service_times, travel_times, waiting_times)]
+    ax1.bar(index, break_times, bottom=service_travel_waiting_bottom, label="Break Time", color="lightgreen")
 
     # Add total time as text on top of each bar
     for i, k in enumerate(caregivers):
         total_time = active_caregivers[k]["total_time"]
         ax1.text(
-            i, sum([service_times[i], travel_times[i], waiting_times[i]]) + 5, f"{total_time:.0f} min", ha="center"
+            i, sum([service_times[i], travel_times[i], waiting_times[i], break_times[i]]) + 5, f"{total_time:.0f} min", ha="center"
         )
 
     # Set x-ticks to show actual caregiver IDs
     ax1.set_xticks(index)
-    ax1.set_xticklabels(caregivers)
+    ax1.set_xticklabels(caregiver_labels, rotation=45, ha='right')
 
     ax1.set_xlabel("Caregiver")
     ax1.set_ylabel("Time (minutes)")
@@ -265,7 +365,7 @@ def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10
 
     # Set x-ticks to show actual caregiver IDs
     ax2.set_xticks(index)
-    ax2.set_xticklabels(caregivers)
+    ax2.set_xticklabels(caregiver_labels, rotation=45, ha='right')
 
     ax2.set_xlabel("Caregiver")
     ax2.set_ylabel("Utilization (%)")
@@ -280,13 +380,14 @@ def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10
     # 3. Pie chart of overall time allocation
     fig3, ax3 = plt.subplots(figsize=(10, 8))
 
-    labels = ["Service Time", "Travel Time", "Waiting Time"]
+    labels = ["Service Time", "Travel Time", "Waiting Time", "Break Time"]
     sizes = [
         aggregate_metrics["total"]["service_time"],
         aggregate_metrics["total"]["travel_time"],
         aggregate_metrics["total"]["waiting_time"],
+        aggregate_metrics["total"]["break_time"],
     ]
-    colors = ["skyblue", "orange", "lightgray"]
+    colors = ["skyblue", "orange", "lightgray", "lightgreen"]
 
     # Calculate percentages for labels
     total = sum(sizes)
@@ -301,7 +402,7 @@ def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10
         autopct="%1.1f%%",
         startangle=90,
         shadow=True,
-        explode=(0.05, 0, 0),  # Slightly explode the service time slice
+        explode=(0.05, 0, 0, 0),  # Slightly explode the service time slice
     )
 
     # Improve text legibility
@@ -324,7 +425,7 @@ def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10
 
     # Set x-ticks to show actual caregiver IDs
     ax4.set_xticks(index)
-    ax4.set_xticklabels(caregivers)
+    ax4.set_xticklabels(caregiver_labels, rotation=45, ha='right')
 
     ax4.set_xlabel("Caregiver")
     ax4.set_ylabel("Number of Tasks")
@@ -335,180 +436,245 @@ def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10
     ax4.axhline(y=avg_tasks, linestyle="--", color="red", label=f"Average: {avg_tasks:.1f}")
     ax4.legend()
 
-    # 5. Time proportions per caregiver
-    fig5, ax5 = plt.subplots(figsize=(14, 6))
-
-    proportions_service = [active_caregivers[k]["proportions"]["service"] for k in caregivers]
-    proportions_travel = [active_caregivers[k]["proportions"]["travel"] for k in caregivers]
-    proportions_waiting = [active_caregivers[k]["proportions"]["waiting"] for k in caregivers]
-
-    # Set width of bars
-    bar_width = 0.8
-
-    # Create stacked percentage bars
-    ax5.bar(index, proportions_service, bar_width, label="Service Time", color="skyblue")
-    ax5.bar(index, proportions_travel, bar_width, bottom=proportions_service, label="Travel Time", color="orange")
-
-    bottom_service_travel = [s + t for s, t in zip(proportions_service, proportions_travel)]
-    ax5.bar(
-        index, proportions_waiting, bar_width, bottom=bottom_service_travel, label="Waiting Time", color="lightgray"
+    # NEW: 6. Historical visits pie chart
+    fig6, ax6 = plt.subplots(figsize=(10, 8))
+    
+    # Get all client data and system continuity metrics
+    client_continuity = continuity_metrics["client_continuity"]
+    system_continuity = continuity_metrics["system_continuity"]
+    
+    # Get historical vs non-historical visit counts
+    historical_visits = system_continuity["total_historical_tasks"]
+    non_historical_visits = system_continuity["total_tasks"] - historical_visits
+    
+    # Create pie chart
+    hist_labels = ["Historical Caregiver Visits", "Non-Historical Caregiver Visits"]
+    hist_sizes = [historical_visits, non_historical_visits]
+    hist_colors = ["#4CAF50", "#F44336"]  # Green for historical, red for non-historical
+    
+    historical_percentage = system_continuity["historical_task_percentage"]
+    hist_label_texts = [
+        f"Historical ({historical_percentage:.1f}%)", 
+        f"Non-Historical ({100-historical_percentage:.1f}%)"
+    ]
+    
+    wedges, texts, autotexts = ax6.pie(
+        hist_sizes,
+        labels=hist_label_texts,
+        colors=hist_colors,
+        autopct="%1.1f%%",
+        startangle=90,
+        shadow=True,
+        explode=(0.05, 0),  # Explode the historical slice
     )
-
-    # Add percentages as text
-    for i in range(len(caregivers)):
-        # Add service percentage
-        if proportions_service[i] > 5:  # Only add text if slice is large enough
-            ax5.text(
-                i,
-                proportions_service[i] / 2,
-                f"{proportions_service[i]:.1f}%",
-                ha="center",
-                va="center",
-                fontweight="bold",
-                color="black",
-            )
-
-        # Add travel percentage
-        if proportions_travel[i] > 5:
-            ax5.text(
-                i,
-                proportions_service[i] + proportions_travel[i] / 2,
-                f"{proportions_travel[i]:.1f}%",
-                ha="center",
-                va="center",
-                fontweight="bold",
-                color="black",
-            )
-
-        # Add waiting percentage
-        if proportions_waiting[i] > 5:
-            ax5.text(
-                i,
-                bottom_service_travel[i] + proportions_waiting[i] / 2,
-                f"{proportions_waiting[i]:.1f}%",
-                ha="center",
-                va="center",
-                fontweight="bold",
-                color="black",
-            )
-
-    ax5.set_ylabel("Percentage of Total Time (%)")
-    ax5.set_xlabel("Caregiver")
-    ax5.set_title("Time Allocation Proportions by Caregiver")
-    ax5.set_yticks(range(0, 101, 10))
-    ax5.set_xticks(index)
-    ax5.set_xticklabels(caregivers)
-    ax5.legend(loc="upper right")
-
-    # Set the upper limit of the y-axis to 100%
-    ax5.set_ylim(0, 100)
-
-    # Add gridlines for readability
-    ax5.grid(axis="y", linestyle="--", alpha=0.7)
+    
+    for text in texts:
+        text.set_fontsize(10)
+    for autotext in autotexts:
+        autotext.set_fontsize(10)
+        autotext.set_fontweight("bold")
+        
+    ax6.axis("equal")
+    ax6.set_title("Proportion of Visits by Historical vs. Non-Historical Caregivers")
+    
+    # NEW: 7. Client visits and caregivers chart
+    fig7, ax7 = plt.subplots(figsize=(12, 8))
+    
+    # Group clients by number of visits
+    visit_groups = {}
+    for client_id, data in client_continuity.items():
+        visits = data["total_tasks"]
+        if visits not in visit_groups:
+            visit_groups[visits] = []
+        visit_groups[visits].append(data["unique_caregivers"])
+    
+    # Prepare data for plot
+    visit_counts = sorted(visit_groups.keys())
+    caregiver_counts = [visit_groups[vc] for vc in visit_counts]
+    
+    # Safety check - need at least one data point
+    if not visit_counts or len(visit_counts) == 0:
+        ax7.text(0.5, 0.5, "No client visit data available", 
+                ha='center', va='center', fontsize=14, transform=ax7.transAxes)
+        ax7.set_title("Distribution of Caregivers per Client Grouped by Visit Count")
+    else:
+        # Calculate average caregivers per visit group
+        avg_caregivers = [np.mean(caregivers) if caregivers else 0 for caregivers in caregiver_counts]
+        
+        # Create positions for x-axis
+        positions = np.arange(len(visit_counts))
+        
+        # Safety check for violin plot - needs at least 2 data points per group
+        valid_violin_data = []
+        valid_positions = []
+        
+        for i, caregivers in enumerate(caregiver_counts):
+            # Add individual data points with jitter
+            x = np.ones_like(caregivers) * i
+            jitter = np.random.normal(0, 0.04, size=len(caregivers))
+            ax7.scatter(x + jitter, caregivers, color='blue', alpha=0.5, s=40)
+            
+            # Only include groups with enough data for violin plot
+            if len(caregivers) >= 2:
+                valid_violin_data.append(caregivers)
+                valid_positions.append(positions[i])
+            
+            # Add average as text
+            if caregivers:  # Only add if there's data
+                max_val = max(caregivers)
+                ax7.text(i, max_val + 0.2, f"Avg: {avg_caregivers[i]:.1f}", ha='center')
+        
+        # Create violin plots only if we have valid data
+        if valid_violin_data:
+            violin_parts = ax7.violinplot(valid_violin_data, positions=valid_positions, showmedians=True)
+            
+            # Change violin colors
+            for pc in violin_parts['bodies']:
+                pc.set_facecolor('skyblue')
+                pc.set_alpha(0.7)
+        
+        # Set axis labels and title
+        ax7.set_xticks(positions)
+        ax7.set_xticklabels([f"{vc} Visits" for vc in visit_counts])
+        ax7.set_xlabel("Number of Visits per Client")
+        ax7.set_ylabel("Number of Unique Caregivers")
+        ax7.set_title("Distribution of Caregivers per Client Grouped by Visit Count")
+        
+        # Add grid lines
+        ax7.grid(True, linestyle='--', alpha=0.7)
+        
+        # Ensure y-axis starts at 0 and has integer ticks
+        max_caregivers = max([max(cg) if cg else 0 for cg in caregiver_counts], default=1)
+        ax7.set_ylim(0, max_caregivers + 1)
+        ax7.set_yticks(np.arange(0, max_caregivers + 1))
 
     # Create the dashboard figure
     dashboard_fig = plt.figure(figsize=dashboard_figsize)
     gs = gridspec.GridSpec(2, 3, figure=dashboard_fig)
 
     # We'll create the plots directly on the dashboard figure
+    # Handle the case where there's only one active caregiver
+    x_positions = index  # Same positions as used for individual charts
+
     # 1. Time allocation bar chart (top left)
     dash_ax1 = dashboard_fig.add_subplot(gs[0, 0])
-    dash_ax1.bar(index, service_times, label="Service", color="skyblue")
-    dash_ax1.bar(index, travel_times, bottom=service_bottom, label="Travel", color="orange")
-    dash_ax1.bar(index, waiting_times, bottom=service_travel_bottom, label="Waiting", color="lightgray")
-    dash_ax1.set_xticks(index)
-    dash_ax1.set_xticklabels(caregivers)
+    dash_ax1.bar(x_positions, service_times, label="Service", color="skyblue")
+    dash_ax1.bar(x_positions, travel_times, bottom=service_bottom, label="Travel", color="orange")
+    dash_ax1.bar(x_positions, waiting_times, bottom=service_travel_bottom, label="Waiting", color="lightgray")
+    dash_ax1.bar(x_positions, break_times, bottom=service_travel_waiting_bottom, label="Break", color="lightgreen")
+    
+    # Ensure tick positions and labels match exactly
+    dash_ax1.set_xticks(x_positions)
+    dash_ax1.set_xticklabels(caregiver_labels, rotation=45, ha='right')
     dash_ax1.set_xlabel("Caregiver")
     dash_ax1.set_ylabel("Time (minutes)")
     dash_ax1.set_title("Time Allocation by Caregiver")
     dash_ax1.legend()
 
-    # 2. Pie chart (top right)
-    dash_ax2 = dashboard_fig.add_subplot(gs[0, 2])
+    # 2. Overall time allocation pie chart (top middle)
+    dash_ax2 = dashboard_fig.add_subplot(gs[0, 1])
     dash_ax2.pie(sizes, labels=labels, colors=colors, autopct="%1.1f%%", startangle=90)
     dash_ax2.axis("equal")
     dash_ax2.set_title("Overall Time Allocation")
 
-    # 3. Utilization bar chart (middle left)
-    dash_ax3 = dashboard_fig.add_subplot(gs[1, 0])
-    dash_ax3.bar(index, utilizations, color="skyblue")
-    dash_ax3.set_xticks(index)
-    dash_ax3.set_xticklabels(caregivers)
-    dash_ax3.axhline(y=avg_util, linestyle="--", color="red", label=f"Avg: {avg_util:.1f}%")
-    dash_ax3.set_xlabel("Caregiver")
-    dash_ax3.set_ylabel("Utilization (%)")
-    dash_ax3.set_title("Caregiver Utilization")
-    dash_ax3.set_ylim(0, 100)
-    dash_ax3.legend()
+    # 3. Historical visits pie chart (top right)
+    dash_ax3 = dashboard_fig.add_subplot(gs[0, 2])
+    dash_ax3.pie(hist_sizes, labels=hist_labels, colors=hist_colors, autopct="%1.1f%%", startangle=90)
+    dash_ax3.axis("equal")
+    dash_ax3.set_title("Historical vs. Non-Historical Visits")
 
-    # 4. Tasks per caregiver (middle right)
-    dash_ax4 = dashboard_fig.add_subplot(gs[1, 1])
-    dash_ax4.bar(index, tasks_per_caregiver, color="skyblue")
-    dash_ax4.set_xticks(index)
-    dash_ax4.set_xticklabels(caregivers)
-    dash_ax4.axhline(y=avg_tasks, linestyle="--", color="red", label=f"Avg: {avg_tasks:.1f}")
+    # 4. Utilization chart (bottom left)
+    dash_ax4 = dashboard_fig.add_subplot(gs[1, 0])
+    dash_ax4.bar(x_positions, utilizations, color="skyblue")
+    
+    # Ensure tick positions and labels match exactly
+    dash_ax4.set_xticks(x_positions)
+    dash_ax4.set_xticklabels(caregiver_labels, rotation=45, ha='right')
+    dash_ax4.axhline(y=avg_util, linestyle="--", color="red", label=f"Avg: {avg_util:.1f}%")
     dash_ax4.set_xlabel("Caregiver")
-    dash_ax4.set_ylabel("Number of Tasks")
-    dash_ax4.set_title("Tasks Assigned per Caregiver")
+    dash_ax4.set_ylabel("Utilization (%)")
+    dash_ax4.set_title("Caregiver Utilization")
+    dash_ax4.set_ylim(0, 100)
     dash_ax4.legend()
 
-    # 5. Time proportions (bottom left)
-    dash_ax5 = dashboard_fig.add_subplot(gs[0, 1])
-    dash_ax5.bar(index, proportions_service, bar_width, label="Service", color="skyblue")
-    dash_ax5.bar(index, proportions_travel, bar_width, bottom=proportions_service, label="Travel", color="orange")
-    dash_ax5.bar(
-        index, proportions_waiting, bar_width, bottom=bottom_service_travel, label="Waiting", color="lightgray"
-    )
-    dash_ax5.set_ylabel("Percentage (%)")
+    # 5. Tasks per caregiver (bottom middle)
+    dash_ax5 = dashboard_fig.add_subplot(gs[1, 1])
+    dash_ax5.bar(x_positions, tasks_per_caregiver, color="skyblue")
+    
+    # Ensure tick positions and labels match exactly
+    dash_ax5.set_xticks(x_positions)
+    dash_ax5.set_xticklabels(caregiver_labels, rotation=45, ha='right')
+    dash_ax5.axhline(y=avg_tasks, linestyle="--", color="red", label=f"Avg: {avg_tasks:.1f}")
     dash_ax5.set_xlabel("Caregiver")
-    dash_ax5.set_title("Time Allocation Proportions")
-    dash_ax5.set_ylim(0, 100)
-    dash_ax5.set_xticks(index)
-    dash_ax5.set_xticklabels(caregivers)
+    dash_ax5.set_ylabel("Number of Tasks")
+    dash_ax5.set_title("Tasks Assigned per Caregiver")
     dash_ax5.legend()
 
-    # 6. Summary statistics text box (bottom right)
+    # 6. Client visits and caregivers chart (bottom right) - replaces the text summary
     dash_ax6 = dashboard_fig.add_subplot(gs[1, 2])
-    dash_ax6.axis("off")
-
-    agg = aggregate_metrics
-
-    summary_text = [
-        f"SCHEDULE SUMMARY",
-        f"",
-        f"Total tasks: {agg['total']['number_of_tasks']}",
-        f"Active caregivers: {agg['active_caregivers']}/{agg['total_caregivers']}",
-        f"",
-        f"TIME ALLOCATION:",
-        f"Service: {agg['total']['service_time']:.0f} min ({agg['proportions']['service']:.1f}%)",
-        f"Travel: {agg['total']['travel_time']:.0f} min ({agg['proportions']['travel']:.1f}%)",
-        f"Waiting: {agg['total']['waiting_time']:.0f} min ({agg['proportions']['waiting']:.1f}%)",
-        f"Total time: {agg['total']['schedule_time']:.0f} min",
-        f"",
-        f"AVERAGES PER CAREGIVER:",
-        f"Tasks: {agg['average']['tasks_per_caregiver']:.1f}",
-        f"Service time: {agg['average']['service_time']:.0f} min",
-        f"Travel time: {agg['average']['travel_time']:.0f} min",
-        f"Waiting time: {agg['average']['waiting_time']:.0f} min",
-        f"Utilization: {agg['average']['utilization']:.1f}%",
-    ]
-
-    # Add text box
-    props = dict(boxstyle="round", facecolor="white", alpha=0.9)
-    dash_ax6.text(
-        0.05,
-        0.95,
-        "\n".join(summary_text),
-        transform=dash_ax6.transAxes,
-        fontsize=11,
-        verticalalignment="top",
-        bbox=props,
-    )
+    
+    # Get visit groups data for violin plot
+    client_continuity = continuity_metrics["client_continuity"]
+    visit_groups = {}
+    for client_id, data in client_continuity.items():
+        visits = data["total_tasks"]
+        if visits not in visit_groups:
+            visit_groups[visits] = []
+        visit_groups[visits].append(data["unique_caregivers"])
+    
+    # Prepare data for plot
+    visit_counts = sorted(visit_groups.keys())
+    caregiver_counts = [visit_groups[vc] for vc in visit_counts]
+    
+    # Safety check - need at least one data point
+    if not visit_counts or len(visit_counts) == 0:
+        dash_ax6.text(0.5, 0.5, "No client visit data available", 
+                ha='center', va='center', fontsize=14, transform=dash_ax6.transAxes)
+        dash_ax6.set_title("Caregivers per Client by Visit Count")
+    else:
+        # Create positions for x-axis
+        positions = np.arange(len(visit_counts))
+        
+        # Add individual data points with jitter
+        for i, caregivers in enumerate(caregiver_counts):
+            x = np.ones_like(caregivers) * i
+            jitter = np.random.normal(0, 0.04, size=len(caregivers))
+            dash_ax6.scatter(x + jitter, caregivers, color='blue', alpha=0.5, s=40)
+        
+        # Only create violin plots if we have enough data
+        valid_violin_data = []
+        valid_positions = []
+        
+        for i, caregivers in enumerate(caregiver_counts):
+            if len(caregivers) >= 2:
+                valid_violin_data.append(caregivers)
+                valid_positions.append(positions[i])
+        
+        if valid_violin_data:
+            violin_parts = dash_ax6.violinplot(valid_violin_data, positions=valid_positions, showmedians=True)
+            
+            # Change violin colors
+            for pc in violin_parts['bodies']:
+                pc.set_facecolor('skyblue')
+                pc.set_alpha(0.7)
+        
+        # Set axis labels and ticks
+        dash_ax6.set_xticks(positions)
+        dash_ax6.set_xticklabels([f"{vc}" for vc in visit_counts])
+        dash_ax6.set_xlabel("Visits per Client")
+        dash_ax6.set_ylabel("Caregivers")
+        dash_ax6.set_title("Caregivers per Client by Visit Count")
+        
+        # Add grid and set y-axis limits
+        dash_ax6.grid(True, linestyle='--', alpha=0.7)
+        max_caregivers = max([max(cg) if cg else 0 for cg in caregiver_counts], default=1)
+        dash_ax6.set_ylim(0, max_caregivers + 1)
+        dash_ax6.set_yticks(np.arange(0, max_caregivers + 1))
 
     plt.tight_layout()
 
     # Handle display based on display_mode
-    individual_figs = [fig1, fig2, fig3, fig4, fig5]
+    individual_figs = [fig1, fig2, fig3, fig4, fig6, fig7]
     all_figs = individual_figs + [dashboard_fig]
 
     # Close figures we don't want to display
@@ -578,7 +744,7 @@ def visualize_routes(model, caregiver_ids=None, subplot_mode=False, figsize=None
         caregiver_ids = model.K
 
     if figsize is None:
-        height = 2 * len(caregiver_ids) if subplot_mode else 8
+        height = 4 / 3 * len(caregiver_ids) if subplot_mode else 8
         figsize = (10, max(8, height))
 
     # Set up colors for caregivers - use distinct colors
@@ -664,7 +830,7 @@ def visualize_routes(model, caregiver_ids=None, subplot_mode=False, figsize=None
     if subplot_mode:
         # Create a figure with subplots for each caregiver
         n_caregivers = len(caregiver_ids)
-        n_cols = min(2, n_caregivers)  # Use max 2 columns
+        n_cols = min(3, n_caregivers)  # Use max 3 columns (changed from 2)
         n_rows = int(np.ceil(n_caregivers / n_cols))
 
         fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, dpi=dpi)

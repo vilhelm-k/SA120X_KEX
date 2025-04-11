@@ -59,6 +59,7 @@ class BaseModel(ABC):
         # Postprocessed results
         self.routes = None
         self.arrivals = None
+        self.breaks = None
 
     def __determine_continuity(self):
         """
@@ -227,7 +228,40 @@ class BaseModel(ABC):
         """
         Extracts the ordered route into a dictionary for each caregiver.
         """
-        pass
+        # First pass: build adjacency lists for each caregiver
+        adjacency = {k: {} for k in self.K}
+
+        for k, i, j in self.x:
+            if self.x[k, i, j].X > 0.5:
+                adjacency[k][i] = j
+
+        # Second pass: traverse adjacency lists to build ordered routes
+        routes = {k: [] for k in self.K}
+
+        for k in self.K:
+            current = "start"
+            while current in adjacency[k] and current != "end":
+                next_node = adjacency[k][current]
+                routes[k].append((current, next_node))
+                current = next_node
+
+        self.routes = routes
+        return routes
+
+    def _extract_breaks(self):
+        """
+        Extracts the break assignments for each caregiver.
+        """
+        breaks = {k: [] for k in self.K}
+
+        # Iterate over all caregivers and tasks
+        for k in self.K:
+            for i in self.V:
+                if self.B[k, i].X > 0.5:
+                    breaks[k].append(i)
+
+        self.breaks = breaks
+        return breaks
 
     def _extract_arrival_times(self):
         """
@@ -256,4 +290,6 @@ class BaseModel(ABC):
             print(f"Model not optimally solved. Status: {self.model.Status}")
         self._extract_routes()
         self._extract_arrival_times()
-        return self.routes, self.arrivals
+        if self.B is not None:
+            self._extract_breaks()
+        return self.routes, self.arrivals, self.breaks
