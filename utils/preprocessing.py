@@ -56,3 +56,10 @@ def create_clients_df(filename):
     clients = pd.read_csv(filename, index_col=0)
     clients["Requirements"] = clients["Requirements"].apply(lambda x: np.array(eval(x)))
     return clients
+
+
+def create_continuity_df(filename):
+    """
+    Creates a continuity dataframe from a csv file.
+    """
+    return pd.read_csv(filename, index_col=0)

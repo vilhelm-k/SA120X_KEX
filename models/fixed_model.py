@@ -12,6 +12,7 @@ class FixedModel(BaseModel):
         regular_hours=8 * 60,
         break_length=30,
         continuity_penalty=30,
+        day_continuity_penalty=5,
     ):
         # ---- Base Model Construction ----
         self.model = gp.Model("HomeCare")
@@ -89,7 +90,7 @@ class FixedModel(BaseModel):
                 for k in self.K
                 for j in self.V
                 for i in self.V
-                if i != j and self.e[j] < self.l[i] + self.c[k, i, j]
+                if i != j and self.e[j] < self.l[i] + self.c(k, i, j)
             )
             == 0,
             name="TemporalInfeasibility",
@@ -98,11 +99,11 @@ class FixedModel(BaseModel):
         # Start and end time definitions
         for k in self.K:
             self.model.addConstr(
-                self.S[k] <= gp.quicksum(self.x[k, "start", i] * (self.e[i] - self.c[k, "start", i]) for i in self.V),
+                self.S[k] <= gp.quicksum(self.x[k, "start", i] * (self.e[i] - self.c(k, "start", i)) for i in self.V),
                 name=f"StartTime[{k}]",
             )
             self.model.addConstr(
-                self.E[k] >= gp.quicksum(self.x[k, i, "end"] * (self.l[i] + self.c[k, i, "end"]) for i in self.V),
+                self.E[k] >= gp.quicksum(self.x[k, i, "end"] * (self.l[i] + self.c(k, i, "end")) for i in self.V),
                 name=f"EndTime[{k}]",
             )
 
@@ -184,10 +185,6 @@ class FixedModel(BaseModel):
             # Add constraints to detect new assignments
             for k in self.K:
                 for c in self.C:
-                    # If there's a historical assignment, new_serve must be 0
-                    if self.H[k, c] == 1:
-                        self.model.addConstr(self.new_serve[k, c] == 0, name=f"NoNewServe[{k},{c}]")
-                        continue
 
                     for i in self.Vc[c]:
                         self.model.addConstr(
@@ -197,7 +194,11 @@ class FixedModel(BaseModel):
 
             # Add continuity penalty term to objective
             objective_terms.append(
-                continuity_penalty * gp.quicksum(self.new_serve[k, c] for k in self.K for c in self.C)
+                gp.quicksum(
+                    self.new_serve[k, c] * (day_continuity_penalty + continuity_penalty * (1 - self.H[k, c]))
+                    for k in self.K
+                    for c in self.C
+                )
             )
 
         # Update objective function with all terms
