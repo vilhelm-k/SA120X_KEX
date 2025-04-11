@@ -498,51 +498,45 @@ def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10
     fig4, ax4 = plt.subplots(figsize=(12, 6))
 
     # Prepare data for temporal violations
-    violation_counts = []
     violation_minutes = []
-    
+
     for k in caregivers:
-        # Count violations for this caregiver
-        violations = active_caregivers[k]["temporal_violations"]
-        violation_counts.append(len(violations))
         # Sum up total violation minutes
+        violations = active_caregivers[k]["temporal_violations"]
         total_mins = sum(v["violation_minutes"] for v in violations)
         violation_minutes.append(total_mins)
-    
-    # Create a double bar chart
-    bar_width = 0.35
-    index1 = index - bar_width/2
-    index2 = index + bar_width/2
-    
-    # Plot count of violations
-    ax4.bar(index1, violation_counts, bar_width, label="Number of Violations", color="indianred")
-    
-    # Create second y-axis for violation minutes
-    ax4_twin = ax4.twinx()
-    ax4_twin.bar(index2, violation_minutes, bar_width, label="Total Violation Minutes", color="firebrick", alpha=0.7)
-    
+
+    # Plot violation minutes with more prominent bars
+    ax4.bar(index, violation_minutes, color="firebrick", alpha=0.9, width=0.6)
+
     # Set x-ticks to show actual caregiver IDs
     ax4.set_xticks(index)
     ax4.set_xticklabels(caregiver_labels, rotation=45, ha='right')
-    
+
     # Set labels and title
     ax4.set_xlabel("Caregiver")
-    ax4.set_ylabel("Number of Violations", color="indianred")
-    ax4_twin.set_ylabel("Violation Minutes", color="firebrick")
-    ax4.set_title("Temporal Violations by Caregiver")
-    
-    # Set tick colors to match the respective axes
-    ax4.tick_params(axis='y', colors="indianred")
-    ax4_twin.tick_params(axis='y', colors="firebrick")
-    
-    # Add a legend
-    lines1, labels1 = ax4.get_legend_handles_labels()
-    lines2, labels2 = ax4_twin.get_legend_handles_labels()
-    ax4.legend(lines1 + lines2, labels1 + labels2, loc="upper right")
-    
-    # Add system average line for violations
-    avg_violations = aggregate_metrics["average"]["violations_per_caregiver"]
-    ax4.axhline(y=avg_violations, linestyle="--", color="darkred", label=f"Avg: {avg_violations:.1f}")
+    ax4.set_ylabel("Violation Minutes")
+    ax4.set_title("Temporal Violations by Caregiver (Minutes)")
+
+    # Add grid for better readability
+    ax4.grid(True, axis='y', linestyle='--', alpha=0.7)
+
+    # Add system average line for violation minutes
+    avg_violation_minutes = np.mean(violation_minutes) if violation_minutes else 0
+    ax4.axhline(y=avg_violation_minutes, linestyle="--", color="darkred", 
+                label=f"Avg: {avg_violation_minutes:.1f} min")
+
+    # Add annotation for total violations
+    total_violation_count = aggregate_metrics['total']['violation_count']
+    total_violation_mins = aggregate_metrics['total']['violation_minutes']
+    ax4.text(
+        0.5, 0.95, 
+        f"Total: {total_violation_count} violations, {total_violation_mins:.1f} minutes", 
+        ha='center', va='top', transform=ax4.transAxes, 
+        bbox=dict(facecolor='white', alpha=0.8, edgecolor='darkred')
+    )
+
+    ax4.legend()
 
     # NEW: 6. Historical visits pie chart
     fig6, ax6 = plt.subplots(figsize=(10, 8))
@@ -708,27 +702,23 @@ def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10
     # 5. Temporal violations chart (bottom middle)
     dash_ax5 = dashboard_fig.add_subplot(gs[1, 1])
     
-    # Plot count of violations as bars
-    dash_ax5.bar(x_positions, violation_counts, color="indianred")
-    
-    # Create second y-axis for violation minutes as a line
-    dash_ax5_twin = dash_ax5.twinx()
-    dash_ax5_twin.plot(x_positions, violation_minutes, 'o-', color="firebrick", linewidth=2)
+    # Plot violation minutes with bars
+    dash_ax5.bar(x_positions, violation_minutes, color="firebrick", alpha=0.9, width=0.6)
     
     # Set labels and ticks
     dash_ax5.set_xticks(x_positions)
     dash_ax5.set_xticklabels(caregiver_labels, rotation=45, ha='right')
     dash_ax5.set_xlabel("Caregiver")
-    dash_ax5.set_ylabel("Violation Count", color="indianred")
-    dash_ax5_twin.set_ylabel("Violation Minutes", color="firebrick")
+    dash_ax5.set_ylabel("Violation Minutes")
     dash_ax5.set_title("Temporal Violations")
     
-    # Set tick colors
-    dash_ax5.tick_params(axis='y', colors="indianred")
-    dash_ax5_twin.tick_params(axis='y', colors="firebrick")
+    # Add grid
+    dash_ax5.grid(True, axis='y', linestyle='--', alpha=0.7)
     
-    # Add system average line
-    dash_ax5.axhline(y=avg_violations, linestyle="--", color="darkred")
+    # Add average line
+    dash_ax5.axhline(y=avg_violation_minutes, linestyle="--", color="darkred", 
+                     label=f"Avg: {avg_violation_minutes:.1f} min")
+    dash_ax5.legend()
     
     # Annotate the total violations
     dash_ax5.text(
