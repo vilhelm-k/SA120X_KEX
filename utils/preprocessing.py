@@ -11,6 +11,7 @@ def create_time_matrix(filename):
     time_matrix = time_matrix.astype("float64") / 60
     time_matrix.columns = time_matrix.columns.astype(int)
     time_matrix.index = time_matrix.index.astype(int)
+
     return time_matrix
 
 
@@ -29,6 +30,7 @@ def create_caregivers_df(filename):
         pd.to_datetime(caregivers["LatestEndTime"]).dt.hour * 60
         + pd.to_datetime(caregivers["LatestEndTime"]).dt.minute
     )
+    caregivers = caregivers.sort_index()
     return caregivers
 
 
@@ -46,6 +48,7 @@ def create_tasks_df(filename, only_client_tasks=True):
     )
     tasks["end_minutes"] = pd.to_datetime(tasks["EndTime"]).dt.hour * 60 + pd.to_datetime(tasks["EndTime"]).dt.minute
     tasks["duration_minutes"] = tasks["end_minutes"] - tasks["start_minutes"]
+    tasks = tasks.sort_index()
     return tasks
 
 
@@ -55,6 +58,7 @@ def create_clients_df(filename):
     """
     clients = pd.read_csv(filename, index_col=0)
     clients["Requirements"] = clients["Requirements"].apply(lambda x: np.array(eval(x)))
+    clients = clients.sort_index()
     return clients
 
 

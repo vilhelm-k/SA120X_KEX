@@ -107,6 +107,29 @@ class BaseModel(ABC):
                         pair_feasibility[k, first, last] = self.e[last] >= self.l[first] + self.c(k, first, last)
         return pair_feasibility
 
+    def c(self, k, i, j):
+        mode_of_transport = self.caregivers.loc[k, "ModeOfTransport"]
+        match mode_of_transport:
+            case "car":
+                time_matrix = self.drive_time_matrix
+            case "pedestrian":
+                time_matrix = self.walk_time_matrix
+            case "bicycle":
+                time_matrix = self.bicycle_time_matrix
+            case _:
+                raise ValueError(f"Unknown mode of transport: {mode_of_transport}")
+
+        if i in self.V and j in self.V:
+            return time_matrix.loc[self.get_location(i), self.get_location(j)]
+        elif i in self.V and j == "end":
+            end_location = self.get_endpoint(k, "end")
+            return 0 if end_location == "Home" else time_matrix.loc[self.get_location(i), 0]
+        elif i == "start" and j in self.V:
+            start_location = self.get_endpoint(k, "start")
+            return 0 if start_location == "Home" else time_matrix.loc[0, self.get_location(j)]
+        else:
+            raise ValueError(f"Invalid task locations: {i}, {j}")
+
     def __determine_client_tasks(self):
         """
         Determine which tasks are associated with each client.
@@ -200,7 +223,6 @@ class BaseModel(ABC):
             raise ValueError(f"Unknown endpoint: {endpoint}")
 
     # Postprocessing
-    @abstractmethod
     def _extract_routes(self):
         """
         Extracts the ordered route into a dictionary for each caregiver.
