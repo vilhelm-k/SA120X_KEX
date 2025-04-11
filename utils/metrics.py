@@ -57,6 +57,7 @@ def calculate_caregiver_metrics(model):
                 "total_time": 0,
                 "utilization": 0,
                 "number_of_tasks": 0,
+                "temporal_violations": [],
                 "proportions": {"travel": 0, "service": 0, "waiting": 0, "break": 0},
             }
             continue
@@ -67,12 +68,13 @@ def calculate_caregiver_metrics(model):
         waiting_time = 0
         break_time = 0
         task_count = 0
+        temporal_violations = []
 
         # Use the same time-sequential approach as in visualize_schedule
         current_time = arrivals[k]["start"]
 
         # Process each route segment in order
-        for i, j in routes[k]:
+        for idx, (i, j) in enumerate(routes[k]):
             if i != "start":
                 # Get actual arrival time at task i
                 task_arrival = arrivals[k][i]
@@ -95,6 +97,33 @@ def calculate_caregiver_metrics(model):
                     break_duration = 30  # This could be adjusted based on model parameters
                     break_time += break_duration
                     current_time += break_duration
+
+            # Check for temporal violations before adding travel time
+            if j != "end" and i != "start":
+                # Calculate the time left after completing task i
+                departure_time = current_time
+                # Calculate required travel time to j
+                travel_required = model.c(k, i, j)
+                # Calculate the earliest possible arrival at j
+                earliest_arrival = departure_time + travel_required
+                # Get the actual arrival time at j
+                actual_arrival = arrivals[k][j]
+
+                # Check if this violates the temporal constraint
+                if earliest_arrival > actual_arrival:
+                    violation_minutes = earliest_arrival - actual_arrival
+                    temporal_violations.append(
+                        {
+                            "from_task": i,
+                            "to_task": j,
+                            "departure_time": departure_time,
+                            "required_travel": travel_required,
+                            "earliest_arrival": earliest_arrival,
+                            "actual_arrival": actual_arrival,
+                            "violation_minutes": violation_minutes,
+                            "sequence": idx,
+                        }
+                    )
 
             # Add travel time to the next location
             travel_duration = model.c(k, i, j)
@@ -134,6 +163,7 @@ def calculate_caregiver_metrics(model):
             "total_time": total_time,
             "utilization": utilization,
             "number_of_tasks": task_count,
+            "temporal_violations": temporal_violations,
             "proportions": proportions,
         }
 
@@ -160,6 +190,14 @@ def calculate_aggregate_metrics(caregiver_metrics, model):
     utilizations = [metrics["utilization"] for metrics in caregiver_metrics.values()]
     task_counts = [metrics["number_of_tasks"] for metrics in caregiver_metrics.values()]
 
+    # Collect all temporal violations
+    all_violations = []
+    for k, metrics in caregiver_metrics.items():
+        for violation in metrics["temporal_violations"]:
+            violation_copy = violation.copy()
+            violation_copy["caregiver"] = k
+            all_violations.append(violation_copy)
+
     # Calculate total values
     total_travel_time = sum(travel_times)
     total_service_time = sum(service_times)
@@ -167,6 +205,8 @@ def calculate_aggregate_metrics(caregiver_metrics, model):
     total_break_time = sum(break_times)
     total_schedule_time = sum(total_times)
     total_tasks = sum(task_counts)
+    total_violations = len(all_violations)
+    total_violation_minutes = sum(v["violation_minutes"] for v in all_violations)
 
     # Calculate average values (only for caregivers with assigned tasks)
     active_caregivers = [k for k in caregiver_metrics if caregiver_metrics[k]["number_of_tasks"] > 0]
@@ -179,6 +219,10 @@ def calculate_aggregate_metrics(caregiver_metrics, model):
     avg_schedule_time = total_schedule_time / num_active_caregivers if num_active_caregivers > 0 else 0
     avg_utilization = total_service_time / total_schedule_time * 100 if total_schedule_time > 0 else 0
     avg_tasks_per_caregiver = total_tasks / num_active_caregivers if num_active_caregivers > 0 else 0
+    avg_violations_per_caregiver = total_violations / num_active_caregivers if num_active_caregivers > 0 else 0
+
+    # Count caregivers with violations
+    caregivers_with_violations = sum(1 for k in caregiver_metrics if caregiver_metrics[k]["temporal_violations"])
 
     # Calculate global proportions
     global_proportions = {
@@ -200,6 +244,8 @@ def calculate_aggregate_metrics(caregiver_metrics, model):
             "break_time": total_break_time,
             "schedule_time": total_schedule_time,
             "number_of_tasks": total_tasks,
+            "violation_count": total_violations,
+            "violation_minutes": total_violation_minutes,
         },
         "average": {
             "travel_time": avg_travel_time,
@@ -209,10 +255,13 @@ def calculate_aggregate_metrics(caregiver_metrics, model):
             "schedule_time": avg_schedule_time,
             "utilization": avg_utilization,
             "tasks_per_caregiver": avg_tasks_per_caregiver,
+            "violations_per_caregiver": avg_violations_per_caregiver,
         },
         "proportions": global_proportions,
         "active_caregivers": num_active_caregivers,
         "total_caregivers": len(caregiver_metrics),
+        "caregivers_with_violations": caregivers_with_violations,
+        "all_violations": all_violations,
         "continuity": continuity_metrics,
     }
 

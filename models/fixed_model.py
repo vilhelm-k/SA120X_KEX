@@ -6,14 +6,14 @@ from .base_model import BaseModel
 class FixedModel(BaseModel):
     def build(
         self,
-        overtime_penalty=1.5,
+        overtime_penalty=1,
         caregiver_penalty=60,
         worktime_per_break=5 * 60,
         regular_hours=8 * 60,
         break_length=30,
         continuity_penalty=45,
         day_continuity_penalty=10,
-        lateness_penalty=10,
+        lateness_penalty=5,
     ):
         # ---- Base Model Construction ----
         self.model = gp.Model("HomeCare")
@@ -98,7 +98,7 @@ class FixedModel(BaseModel):
                         # Slackened constraint: arrival time at j can be earlier than departure from i plus travel time
                         # but we penalize this violation in the objective function
                         self.model.addConstr(
-                            self.x[k, i, j] * (self.e[j] - self.l[i] - self.c(k, i, j) + self.temporal_slack[k, i, j])
+                            self.x[k, i, j] * (self.e[j] - self.l[i] - self.c(k, i, j)) + self.temporal_slack[k, i, j]
                             >= 0,
                             name=f"TemporalFeasibility[{k},{i},{j}]",
                         )
