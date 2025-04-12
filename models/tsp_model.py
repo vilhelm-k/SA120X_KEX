@@ -1,6 +1,7 @@
 import gurobipy as gp
 from gurobipy import GRB
 from .base_model import BaseModel
+import itertools
 
 
 class TSPModel(BaseModel):
@@ -19,72 +20,85 @@ class TSPModel(BaseModel):
         # ---- Base Model Construction ----
         self.model = gp.Model("HomeCare")
 
-        # Base variables
-        self.x = {}  # Route variables
-        self.w = {}  # Weights incorporating service times and waiting times, measured end to end.
-        self.T = {}  # Total time variables
-        self.is_used = {}  # Caregiver usage variables
+        # Precompute all variable indices and weights
+        # Create variable indices for x
+        x_indices = []
+        w_values = {}  # Store weights for each (k,i,j) combination
 
-        # Create base decision variables
         for k in self.K:
-            # Regular task routes
+            # Start-to-task routes
             for i in self.V:
-                # Routes between tasks and start/end
-                self.x[k, "start", i] = self.model.addVar(vtype=GRB.BINARY, name=f"x^{k}_start_{i}")
-                self.w[k, "start", i] = self.c(k, "start", i) + self.s[i]
-                self.x[k, i, "end"] = self.model.addVar(vtype=GRB.BINARY, name=f"x^{k}_{i}_end")
-                self.w[k, i, "end"] = self.c(k, i, "end")
+                x_indices.append((k, "start", i))
+                w_values[(k, "start", i)] = self.c(k, "start", i) + self.s[i]
 
-                # Routes between tasks
+                # Task-to-end routes
+                x_indices.append((k, i, "end"))
+                w_values[(k, i, "end")] = self.c(k, i, "end")
+
+                # Task-to-task routes
                 for j in self.V:
                     if i != j:
-                        self.x[k, i, j] = self.model.addVar(vtype=GRB.BINARY, name=f"x^{k}_{i}_{j}")
-                        self.w[k, i, j] = (
+                        x_indices.append((k, i, j))
+                        w_values[(k, i, j)] = (
                             self.l[j]
                             - self.l[i]
                             - lateness_penalty * (min(0, self.e[j] - self.l[i] - self.c(k, i, j)))
                         )
 
-            # Caregiver usage
-            self.is_used[k] = self.model.addVar(vtype=GRB.BINARY, name=f"is_used_{k}")
+        # Create variables in batches
+        print("Creating batch variables...")
 
-            # Total time
-            self.T[k] = self.model.addVar(vtype=GRB.CONTINUOUS, lb=0, name=f"T_{k}")
+        # Create x variables (route variables)
+        x_vars = self.model.addVars(x_indices, vtype=GRB.BINARY, name="x")
+        self.x = x_vars
+
+        # Create caregiver usage variables
+        is_used_vars = self.model.addVars(self.K, vtype=GRB.BINARY, name="is_used")
+        self.is_used = is_used_vars
+
+        # Create total time variables
+        T_vars = self.model.addVars(self.K, vtype=GRB.CONTINUOUS, lb=0, name="T")
+        self.T = T_vars
+
+        # Store weights for each route
+        self.w = w_values
 
         print("Created base variables.")
 
         # ---- Base Constraints ----
+        print("Adding constraints in batches...")
 
-        # Define caregiver usage
+        # Define caregiver usage constraints
+        usage_constrs = {}
         for k in self.K:
-            self.model.addConstr(
-                self.is_used[k] == gp.quicksum(self.x[k, "start", i] for i in self.V), name=f"Used[{k}]"
-            )
+            usage_constrs[k] = self.is_used[k] == gp.quicksum(self.x[k, "start", i] for i in self.V)
+        self.model.addConstrs((usage_constrs[k] for k in self.K), name="Used")
 
         # Each task is visited exactly once by exactly one caregiver
+        visit_constrs = {}
         for i in self.V:
-            self.model.addConstr(
-                gp.quicksum(self.x[k, j, i] for k in self.K for j in self.V + ["start"] if j != i) == 1,
-                name=f"UniqueVisit[{i}]",
-            )
+            visit_constrs[i] = gp.quicksum(self.x[k, j, i] for k in self.K for j in self.V + ["start"] if j != i) == 1
+        self.model.addConstrs((visit_constrs[i] for i in self.V), name="UniqueVisit")
 
         # Flow conservation for regular tasks
+        flow_constrs = {}
         for k in self.K:
             for i in self.V:
-                self.model.addConstr(
+                flow_constrs[k, i] = (
                     gp.quicksum(self.x[k, i, j] for j in self.V + ["end"] if j != i)
                     - gp.quicksum(self.x[k, j, i] for j in self.V + ["start"] if j != i)
-                    == 0,
-                    name=f"Flow[{k},{i}]",
+                    == 0
                 )
+        self.model.addConstrs((flow_constrs[k, i] for k in self.K for i in self.V), name="Flow")
 
         # Only visit clients that the caregiver is qualified to visit
+        qual_constrs = {}
         unqualified_visits = []
         for k in self.K:
             for j in self.V:
                 if not self.is_caregiver_qualified(k, j):
                     for i in self.V + ["start"]:
-                        if i != j:
+                        if i != j and (k, i, j) in self.x:
                             unqualified_visits.append(self.x[k, i, j])
 
         if unqualified_visits:
@@ -94,16 +108,15 @@ class TSPModel(BaseModel):
             )
 
         # Define total time for each caregiver
+        time_constrs = {}
         for k in self.K:
-            self.model.addConstr(
-                self.T[k]
-                >= gp.quicksum(self.w[k, i, j] * self.x[k, i, j] for i in self.V for j in self.V if i != j)
-                + gp.quicksum(
-                    self.w[k, "start", i] * self.x[k, "start", i] + self.w[k, i, "end"] * self.x[k, i, "end"]
-                    for i in self.V
-                ),
-                name=f"TotalTime[{k}]",
+            time_constrs[k] = self.T[k] >= gp.quicksum(
+                self.w[k, i, j] * self.x[k, i, j] for i in self.V for j in self.V if i != j and (k, i, j) in self.x
+            ) + gp.quicksum(
+                self.w[k, "start", i] * self.x[k, "start", i] + self.w[k, i, "end"] * self.x[k, i, "end"]
+                for i in self.V
             )
+        self.model.addConstrs((time_constrs[k] for k in self.K), name="TotalTime")
 
         # Base objective: minimize total time
         base_objective = gp.quicksum(self.T[k] for k in self.K)
@@ -117,17 +130,15 @@ class TSPModel(BaseModel):
         # 1. Add overtime penalties if needed
         if overtime_penalty > 0:
             print("Adding overtime penalties.")
-            self.overtime = {}
+            # Create overtime variables in batch
+            overtime_vars = self.model.addVars(self.K, vtype=GRB.CONTINUOUS, lb=0, name="overtime")
+            self.overtime = overtime_vars
 
-            # Create overtime variables
+            # Add overtime constraints in batch
+            overtime_constrs = {}
             for k in self.K:
-                self.overtime[k] = self.model.addVar(vtype=GRB.CONTINUOUS, lb=0, name=f"overtime_{k}")
-
-                # Overtime calculation constraint
-                self.model.addConstr(
-                    self.overtime[k] >= self.T[k] - regular_hours,
-                    name=f"OvertimeCalculation[{k}]",
-                )
+                overtime_constrs[k] = self.overtime[k] >= self.T[k] - regular_hours
+            self.model.addConstrs((overtime_constrs[k] for k in self.K), name="OvertimeCalculation")
 
             # Add overtime term to objective
             objective_terms.append(overtime_penalty * gp.quicksum(self.overtime[k] for k in self.K))
@@ -141,30 +152,28 @@ class TSPModel(BaseModel):
         # 3. Add break requirements if needed
         if worktime_per_break > 0:
             print("Adding break requirements with evening shift exemption.")
-            self.B = {}
 
-            # Create evening shift variables (1 if caregiver starts after 15:30 = 930 minutes)
-            self.is_evening_shift = {}
+            # Create evening shift variables in batch
+            is_evening_shift_vars = self.model.addVars(self.K, vtype=GRB.BINARY, name="is_evening_shift")
+            self.is_evening_shift = is_evening_shift_vars
+
+            # Evening shift time threshold
             evening_shift_time = 15 * 60 + 30  # 15:30 in minutes since midnight
 
+            # Set evening shift constraints in batch
+            evening_constrs = {}
             for k in self.K:
-                self.is_evening_shift[k] = self.model.addVar(vtype=GRB.BINARY, name=f"is_evening_shift_{k}")
-
-                # Set is_evening_shift to 1 if caregiver starts after 15:30
                 start_time = gp.quicksum(self.x[k, "start", i] * (self.e[i] - self.c(k, "start", i)) for i in self.V)
-                self.model.addConstr(
-                    self.is_evening_shift[k] <= (start_time - evening_shift_time) / 1440 + 1,
-                    name=f"EveningShiftUpper[{k}]",
-                )
+                evening_constrs[k] = self.is_evening_shift[k] <= (start_time - evening_shift_time) / 1440 + 1
+            self.model.addConstrs((evening_constrs[k] for k in self.K), name="EveningShiftUpper")
 
-            # Create break variables
-            for k in self.K:
-                for i in self.V:
-                    self.B[k, i] = self.model.addVar(vtype=GRB.BINARY, name=f"B^{k}_{i}")
+            # Create break variables in batch
+            B_vars = self.model.addVars([(k, i) for k in self.K for i in self.V], vtype=GRB.BINARY, name="B")
+            self.B = B_vars
 
-            # Add break constraints with evening shift exemption
+            # Add break constraints based on evening shift exemption
             for k in self.K:
-                # One break for every worktime_per_break minutes of work, but only if not on evening shift
+                # One break for every worktime_per_break minutes, but only if not on evening shift
                 self.model.addGenConstrIndicator(
                     self.is_evening_shift[k],
                     False,
@@ -172,42 +181,49 @@ class TSPModel(BaseModel):
                     name=f"BreakRequired[{k}]",
                 )
 
-                # Can only take a break if the caregiver visited a task with enough time for the break
+                # Can only take a break if caregiver visited a task with enough break time after
+                break_constrs = {}
                 for i in self.V:
                     # Collect all valid break pairs
                     valid_break_terms = []
                     for j in self.V:
-                        if i != j and self.is_break_feasible(k, i, j, break_length):
+                        if i != j and self.is_break_feasible(k, i, j, break_length) and (k, i, j) in self.x:
                             valid_break_terms.append(self.x[k, i, j])
 
                     if valid_break_terms:
-                        self.model.addConstr(
-                            self.B[k, i] <= gp.quicksum(valid_break_terms),
-                            name=f"BreakVisit[{k},{i}]",
-                        )
+                        break_constrs[k, i] = self.B[k, i] <= gp.quicksum(valid_break_terms)
                     else:
-                        # If no break is possible after this task, set the break variable to 0
-                        self.model.addConstr(self.B[k, i] == 0, name=f"NoBreak[{k},{i}]")
+                        break_constrs[k, i] = self.B[k, i] == 0
+
+                # Add all break constraints in batch
+                self.model.addConstrs((break_constrs[k, i] for i in self.V), name=f"BreakVisit[{k}]")
 
         # 4. Add continuity of care penalties if needed
         if continuity_penalty > 0:
             print("Adding continuity of care penalties.")
-            self.new_serve = {}
 
-            # Create new_serve variables
-            for k in self.K:
-                for c in self.C:
-                    self.new_serve[k, c] = self.model.addVar(vtype=GRB.BINARY, name=f"new_serve_{k}_{c}")
+            # Create new_serve variables in batch
+            new_serve_vars = self.model.addVars(
+                [(k, c) for k in self.K for c in self.C], vtype=GRB.BINARY, name="new_serve"
+            )
+            self.new_serve = new_serve_vars
 
             # Add constraints to detect new assignments
+            serve_constrs = {}
             for k in self.K:
                 for c in self.C:
                     client_tasks = self.get_client_tasks(c)
                     for j in client_tasks:
-                        self.model.addConstr(
-                            self.new_serve[k, c] >= gp.quicksum(self.x[k, i, j] for i in self.V + ["start"] if i != j),
-                            name=f"NewServe[{k},{c}]",
+                        serve_constrs[k, c, j] = self.new_serve[k, c] >= gp.quicksum(
+                            self.x[k, i, j] for i in self.V + ["start"] if i != j and (k, i, j) in self.x
                         )
+
+            # Add all serve constraints in batch if there are any
+            if serve_constrs:
+                self.model.addConstrs(
+                    (serve_constrs[k, c, j] for k in self.K for c in self.C for j in self.get_client_tasks(c)),
+                    name="NewServe",
+                )
 
             # Add continuity penalty term to objective
             objective_terms.append(
