@@ -100,7 +100,7 @@ class TSPModel(BaseModel):
                         # Slackened constraint: arrival time at j can be earlier than departure from i plus travel time
                         # but we penalize this violation in the objective function
                         self.model.addConstr(
-                            self.x[k, i, j] * (self.e[j] - self.l[i] - self.c(k, i, j) + self.temporal_slack[k, i, j])
+                            self.x[k, i, j] * (self.e[j] - self.l[i] - self.c(k, i, j)) + self.temporal_slack[k, i, j]
                             >= 0,
                             name=f"TemporalFeasibility[{k},{i},{j}]",
                         )

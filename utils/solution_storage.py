@@ -67,12 +67,6 @@ def create_model_from_real_data(
 
             # Record arrival time (use the planned start time)
             model.arrivals[k][idx] = task["start_minutes"]
-
-            if prev_task != "start":
-                cheating = model.e[idx] - model.l[prev_task] - model.c(k, prev_task, idx)
-                if cheating < 0:
-                    print(f"Caregiver {k} is cheating by {cheating} minutes between {prev_task} and {idx}")
-
             # Update previous task
             prev_task = idx
 
