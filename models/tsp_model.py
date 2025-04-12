@@ -38,7 +38,11 @@ class TSPModel(BaseModel):
                 for j in self.V:
                     if i != j:
                         self.x[k, i, j] = self.model.addVar(vtype=GRB.BINARY, name=f"x^{k}_{i}_{j}")
-                        self.w[k, i, j] = self.l[j] - self.l[i]
+                        self.w[k, i, j] = (
+                            self.l[j]
+                            - self.l[i]
+                            - lateness_penalty * (min(0, self.e[j] - self.l[i] - self.c(k, i, j)))
+                        )
 
             # Caregiver usage
             self.is_used[k] = self.model.addVar(vtype=GRB.BINARY, name=f"is_used_{k}")
@@ -86,25 +90,6 @@ class TSPModel(BaseModel):
             name="Qualification",
         )
 
-        # Temporal feasibility constraint with slack variables
-        self.temporal_slack = {}
-        for k in self.K:
-            for i in self.V:
-                for j in self.V:
-                    if i != j:
-                        # Create slack variable for temporal constraint
-                        self.temporal_slack[k, i, j] = self.model.addVar(
-                            vtype=GRB.CONTINUOUS, lb=0, name=f"temporal_slack_{k}_{i}_{j}"
-                        )
-
-                        # Slackened constraint: arrival time at j can be earlier than departure from i plus travel time
-                        # but we penalize this violation in the objective function
-                        self.model.addConstr(
-                            self.x[k, i, j] * (self.e[j] - self.l[i] - self.c(k, i, j)) + self.temporal_slack[k, i, j]
-                            >= 0,
-                            name=f"TemporalFeasibility[{k},{i},{j}]",
-                        )
-
         # Define total time for each caregiver
         for k in self.K:
             self.model.addConstr(
@@ -118,9 +103,7 @@ class TSPModel(BaseModel):
             )
 
         # Base objective: minimize total time
-        base_objective = gp.quicksum(self.T[k] for k in self.K) + lateness_penalty * gp.quicksum(
-            self.temporal_slack[k, i, j] for k in self.K for i in self.V for j in self.V if i != j
-        )
+        base_objective = gp.quicksum(self.T[k] for k in self.K)
         self.model.setObjective(base_objective, GRB.MINIMIZE)
 
         print("Built base model.")
@@ -154,20 +137,36 @@ class TSPModel(BaseModel):
 
         # 3. Add break requirements if needed
         if worktime_per_break > 0:
-            print("Adding break requirements.")
+            print("Adding break requirements with evening shift exemption.")
             self.B = {}
             feasible_breaks = self.determine_feasible_breaks(break_length)
+
+            # Create evening shift variables (1 if caregiver starts after 15:30 = 930 minutes)
+            self.is_evening_shift = {}
+            evening_shift_time = 15 * 60 + 30  # 15:30 in minutes since midnight
+
+            for k in self.K:
+                self.is_evening_shift[k] = self.model.addVar(vtype=GRB.BINARY, name=f"is_evening_shift_{k}")
+
+                # Set is_evening_shift to 1 if caregiver starts after 15:30
+                start_time = gp.quicksum(self.x[k, "start", i] * (self.e[i] - self.c(k, "start", i)) for i in self.V)
+                self.model.addConstr(
+                    self.is_evening_shift[k] <= (start_time - evening_shift_time) / 1440 + 1,
+                    name=f"EveningShiftUpper[{k}]",
+                )
 
             # Create break variables
             for k in self.K:
                 for i in self.V:
                     self.B[k, i] = self.model.addVar(vtype=GRB.BINARY, name=f"B^{k}_{i}")
 
-            # Add break constraints
+            # Add break constraints with evening shift exemption
             for k in self.K:
-                # One break for every worktime_per_break minutes of work
-                self.model.addConstr(
-                    gp.quicksum(self.B[k, i] for i in self.V) >= (self.T[k]) / worktime_per_break - 1,
+                # One break for every worktime_per_break minutes of work, but only if not on evening shift
+                self.model.addGenConstrIndicator(
+                    self.is_evening_shift[k],
+                    False,
+                    gp.quicksum(self.B[k, i] for i in self.V) >= (self.T[k] / worktime_per_break - 1),
                     name=f"BreakRequired[{k}]",
                 )
 

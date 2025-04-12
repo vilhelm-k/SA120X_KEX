@@ -6,7 +6,7 @@ from .base_model import BaseModel
 class FixedModel(BaseModel):
     def build(
         self,
-        overtime_penalty=1,
+        overtime_penalty=0.5,
         caregiver_penalty=60,
         worktime_per_break=5 * 60,
         regular_hours=8 * 60,
@@ -86,18 +86,15 @@ class FixedModel(BaseModel):
 
         # Temporal feasibility constraint without slack variables when not needed
         # Instead, we'll directly add the constant term to the objective when needed
-        lateness_total = 0
-        for k in self.K:
-            for i in self.V:
-                for j in self.V:
-                    if i != j:
-                        temporal_diff = self.e[j] - self.l[i] - self.c(k, i, j)
-
-                        if temporal_diff < 0:
-                            # Case where slack would be needed (negative temporal difference)
-                            # Add the penalty directly to the objective function
-                            lateness_term = -temporal_diff * self.x[k, i, j]
-                            lateness_total += lateness_term
+        # Calculate lateness penalty directly in the objective function
+        # This is more efficient than accumulating terms one by one
+        lateness_total = gp.quicksum(
+            -1 * (self.e[j] - self.l[i] - self.c(k, i, j)) * self.x[k, i, j]
+            for k in self.K
+            for i in self.V
+            for j in self.V
+            if i != j and (self.e[j] - self.l[i] - self.c(k, i, j)) < 0
+        )
 
         # Start and end time definitions
         for k in self.K:
