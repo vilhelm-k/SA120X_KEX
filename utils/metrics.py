@@ -83,7 +83,7 @@ def calculate_caregiver_metrics(model):
                 if current_time < task_arrival:
                     waiting_duration = task_arrival - current_time
                     waiting_time += waiting_duration
-                    current_time = task_arrival
+                current_time = task_arrival
 
                 # Add service time for task i
                 task_duration = service_times[i]

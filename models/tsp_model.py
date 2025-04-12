@@ -6,14 +6,14 @@ from .base_model import BaseModel
 class TSPModel(BaseModel):
     def build(
         self,
-        overtime_penalty=1.5,
+        overtime_penalty=1,
         caregiver_penalty=60,
         worktime_per_break=5 * 60,
         regular_hours=8 * 60,
         break_length=30,
         continuity_penalty=45,
         day_continuity_penalty=10,
-        lateness_penalty=10,
+        lateness_penalty=5,
     ):
         # ---- Base Model Construction ----
         self.model = gp.Model("HomeCare")

@@ -84,24 +84,20 @@ class FixedModel(BaseModel):
             name="Qualification",
         )
 
-        # Temporal feasibility constraint with slack variables
-        self.temporal_slack = {}
+        # Temporal feasibility constraint without slack variables when not needed
+        # Instead, we'll directly add the constant term to the objective when needed
+        lateness_total = 0
         for k in self.K:
             for i in self.V:
                 for j in self.V:
                     if i != j:
-                        # Create slack variable for temporal constraint
-                        self.temporal_slack[k, i, j] = self.model.addVar(
-                            vtype=GRB.CONTINUOUS, lb=0, name=f"temporal_slack_{k}_{i}_{j}"
-                        )
+                        temporal_diff = self.e[j] - self.l[i] - self.c(k, i, j)
 
-                        # Slackened constraint: arrival time at j can be earlier than departure from i plus travel time
-                        # but we penalize this violation in the objective function
-                        self.model.addConstr(
-                            self.x[k, i, j] * (self.e[j] - self.l[i] - self.c(k, i, j)) + self.temporal_slack[k, i, j]
-                            >= 0,
-                            name=f"TemporalFeasibility[{k},{i},{j}]",
-                        )
+                        if temporal_diff < 0:
+                            # Case where slack would be needed (negative temporal difference)
+                            # Add the penalty directly to the objective function
+                            lateness_term = -temporal_diff * self.x[k, i, j]
+                            lateness_total += lateness_term
 
         # Start and end time definitions
         for k in self.K:
@@ -117,10 +113,8 @@ class FixedModel(BaseModel):
             # Start time before end time (basic temporal constraint)
             self.model.addConstr(self.E[k] >= self.S[k], name=f"StartBeforeEnd[{k}]")
 
-        # Base objective: minimize total time
-        base_objective = gp.quicksum(self.E[k] - self.S[k] for k in self.K) + lateness_penalty * gp.quicksum(
-            self.temporal_slack[k, i, j] for k in self.K for i in self.V for j in self.V if i != j
-        )
+        # Base objective: minimize total time + lateness penalty
+        base_objective = gp.quicksum(self.E[k] - self.S[k] for k in self.K) + lateness_penalty * lateness_total
         self.model.setObjective(base_objective, GRB.MINIMIZE)
 
         print("Built base model.")
@@ -154,20 +148,35 @@ class FixedModel(BaseModel):
 
         # 3. Add break requirements if needed
         if worktime_per_break > 0:
-            print("Adding break requirements.")
+            print("Adding break requirements with evening shift exemption.")
             self.B = {}
             feasible_breaks = self.determine_feasible_breaks(break_length)
+
+            # Create evening shift variables (1 if caregiver starts after 15:30 = 930 minutes)
+            self.is_evening_shift = {}
+            evening_shift_time = 15 * 60 + 30  # 15:30 in minutes since midnight
+
+            for k in self.K:
+                self.is_evening_shift[k] = self.model.addVar(vtype=GRB.BINARY, name=f"is_evening_shift_{k}")
+
+                # Set is_evening_shift to 1 if caregiver starts after 15:30
+                self.model.addConstr(
+                    self.is_evening_shift[k] <= (self.S[k] - evening_shift_time) / 1440 + 1,
+                    name=f"EveningShiftUpper[{k}]",
+                )
 
             # Create break variables
             for k in self.K:
                 for i in self.V:
                     self.B[k, i] = self.model.addVar(vtype=GRB.BINARY, name=f"B^{k}_{i}")
 
-            # Add break constraints
+            # Add break constraints with evening shift exemption
             for k in self.K:
-                # One break for every worktime_per_break minutes of work
-                self.model.addConstr(
-                    gp.quicksum(self.B[k, i] for i in self.V) >= (self.E[k] - self.S[k]) / worktime_per_break - 1,
+                # One break for every worktime_per_break minutes of work, but only if not on evening shift
+                self.model.addGenConstrIndicator(
+                    self.is_evening_shift[k],
+                    False,
+                    gp.quicksum(self.B[k, i] for i in self.V) >= ((self.E[k] - self.S[k]) / worktime_per_break - 1),
                     name=f"BreakRequired[{k}]",
                 )
 

@@ -68,7 +68,7 @@ def visualize_schedule(model):
                             "Color": "lightgray",
                         }
                     )
-                    current_time = task_arrival
+                current_time = task_arrival
 
                 # Activity
                 task_duration = service_times[i]
@@ -199,16 +199,6 @@ def visualize_schedule(model):
             if "actual_arrival" in violation and "Next_Task" in row and row["Next_Task"] is not None:
                 # Get the exact time of the violation (arrival time at next task)
                 violation_time = violation["actual_arrival"]
-                
-                # Draw a vertical line at the exact violation point
-                line = plt.Line2D(
-                    [violation_time, violation_time],
-                    [y_pos - 0.325, y_pos + 0.375],  # Extend slightly above and below the task box
-                    color='red',
-                    linewidth=2.5,
-                    zorder=10
-                )
-                ax.add_line(line)
                 
                 # Add a small label with violation minutes
                 if "violation_minutes" in violation:
