@@ -15,6 +15,7 @@ class TSPModel(BaseModel):
         day_continuity_penalty=10,
         lateness_penalty=5,
     ):
+        print("Building TSP model.")
         # ---- Base Model Construction ----
         self.model = gp.Model("HomeCare")
 
@@ -78,17 +79,19 @@ class TSPModel(BaseModel):
                 )
 
         # Only visit clients that the caregiver is qualified to visit
-        self.model.addConstr(
-            gp.quicksum(
-                self.x[k, i, j]
-                for k in self.K
-                for j in self.V
-                for i in self.V + ["start"]
-                if j not in self.Vk[k] and i != j
+        unqualified_visits = []
+        for k in self.K:
+            for j in self.V:
+                if not self.is_caregiver_qualified(k, j):
+                    for i in self.V + ["start"]:
+                        if i != j:
+                            unqualified_visits.append(self.x[k, i, j])
+
+        if unqualified_visits:
+            self.model.addConstr(
+                gp.quicksum(unqualified_visits) == 0,
+                name="Qualification",
             )
-            == 0,
-            name="Qualification",
-        )
 
         # Define total time for each caregiver
         for k in self.K:
@@ -139,7 +142,6 @@ class TSPModel(BaseModel):
         if worktime_per_break > 0:
             print("Adding break requirements with evening shift exemption.")
             self.B = {}
-            feasible_breaks = self.determine_feasible_breaks(break_length)
 
             # Create evening shift variables (1 if caregiver starts after 15:30 = 930 minutes)
             self.is_evening_shift = {}
@@ -170,15 +172,22 @@ class TSPModel(BaseModel):
                     name=f"BreakRequired[{k}]",
                 )
 
-                # Can only take a break if the caregiver visited a task
+                # Can only take a break if the caregiver visited a task with enough time for the break
                 for i in self.V:
-                    self.model.addConstr(
-                        self.B[k, i]
-                        <= gp.quicksum(
-                            feasible_breaks[k, i, j] * self.x[k, i, j] for j in self.V if (k, i, j) in feasible_breaks
-                        ),
-                        name=f"BreakVisit[{k},{i}]",
-                    )
+                    # Collect all valid break pairs
+                    valid_break_terms = []
+                    for j in self.V:
+                        if i != j and self.is_break_feasible(k, i, j, break_length):
+                            valid_break_terms.append(self.x[k, i, j])
+
+                    if valid_break_terms:
+                        self.model.addConstr(
+                            self.B[k, i] <= gp.quicksum(valid_break_terms),
+                            name=f"BreakVisit[{k},{i}]",
+                        )
+                    else:
+                        # If no break is possible after this task, set the break variable to 0
+                        self.model.addConstr(self.B[k, i] == 0, name=f"NoBreak[{k},{i}]")
 
         # 4. Add continuity of care penalties if needed
         if continuity_penalty > 0:
@@ -193,7 +202,8 @@ class TSPModel(BaseModel):
             # Add constraints to detect new assignments
             for k in self.K:
                 for c in self.C:
-                    for j in self.Vc[c]:
+                    client_tasks = self.get_client_tasks(c)
+                    for j in client_tasks:
                         self.model.addConstr(
                             self.new_serve[k, c] >= gp.quicksum(self.x[k, i, j] for i in self.V + ["start"] if i != j),
                             name=f"NewServe[{k},{c}]",
@@ -202,7 +212,8 @@ class TSPModel(BaseModel):
             # Add continuity penalty term to objective
             objective_terms.append(
                 gp.quicksum(
-                    self.new_serve[k, c] * (day_continuity_penalty + continuity_penalty * (1 - self.H[k, c]))
+                    self.new_serve[k, c]
+                    * (day_continuity_penalty + continuity_penalty * (1 - self.is_historically_visited(k, c)))
                     for k in self.K
                     for c in self.C
                 )

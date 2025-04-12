@@ -280,9 +280,7 @@ def calculate_continuity_metrics(model):
     """
     # Extract model data
     routes = model.routes
-    H = model.H  # Historical continuity data
     C = model.C  # List of clients
-    Vc = model.Vc  # Tasks for each client
 
     # Map each task to its assigned caregiver
     task_caregiver_map = {}
@@ -294,7 +292,7 @@ def calculate_continuity_metrics(model):
     # Calculate client-specific continuity metrics
     client_continuity = {}
     for c in C:
-        client_tasks = Vc[c]
+        client_tasks = model.get_client_tasks(c)
         total_tasks = len(client_tasks)
 
         # Skip clients with no tasks
@@ -309,8 +307,8 @@ def calculate_continuity_metrics(model):
                 caregivers_today[k] = caregivers_today.get(k, 0) + 1
 
         # Calculate historical continuity
-        historical_caregivers = [k for k in model.K if H[k, c] == 1]
-        assigned_historical = [k for k in caregivers_today if H[k, c] == 1]
+        historical_caregivers = [k for k in model.K if model.is_historically_visited(k, c)]
+        assigned_historical = [k for k in caregivers_today if model.is_historically_visited(k, c)]
 
         unique_caregivers = len(caregivers_today)
         historical_tasks = sum(caregivers_today.get(k, 0) for k in historical_caregivers)
@@ -350,7 +348,7 @@ def calculate_continuity_metrics(model):
     )
 
     system_continuity = {
-        "avg_caregivers_per_client": total_unique_caregivers / active_clients,
+        "avg_caregivers_per_client": total_unique_caregivers / active_clients if active_clients > 0 else 0,
         "avg_historical_continuity": (
             (total_historical_caregivers / total_unique_caregivers * 100) if total_unique_caregivers > 0 else 0
         ),

@@ -39,17 +39,13 @@ class BaseModel(ABC):
         self.bicycle_time_matrix = bicycle_time_matrix
         self.continuity = continuity
 
-        # Preprocessed input data
+        # Preprocessed input data - these are small and used frequently, so keep as dictionaries
         self.K = self.caregivers.index.tolist()
         self.V = self.tasks.index.tolist()
         self.C = self.clients.index.tolist()
         self.s = {i: self.tasks.loc[i, "duration_minutes"] for i in self.V}  # s[i] Service time for i
         self.e = {i: self.tasks.loc[i, "start_minutes"] for i in self.V}  # e[i] Earliest start time for i
         self.l = {i: self.tasks.loc[i, "end_minutes"] for i in self.V}  # l[i] Latest end time for
-        self.Vk = self.__determine_qualified_tasks()  # Qualified tasks for each caregiver
-        self.Vc = self.__determine_client_tasks()  # Tasks for each client
-        self.A = self.__determine_pair_feasibility()
-        self.H = self.__determine_continuity()  # H[k,c] represents if k has visited c historically
 
         # Model variables
         self.model = None
@@ -61,16 +57,65 @@ class BaseModel(ABC):
         self.arrivals = None
         self.breaks = None
 
-    def __determine_continuity(self):
+        # Save actual routes and arrival times from PlannedCaregiverID
+        self.real_routes, self.real_arrivals = self.__extract_real_routes_and_arrivals()
+
+    def __extract_real_routes_and_arrivals(self):
         """
-        Determine the continuity of care for each caregiver and task.
+        Extract the real routes and arrival times based on the PlannedCaregiverID in tasks
+        Returns:
+            tuple: (real_routes, real_arrivals) dictionaries
         """
-        continuity = {}
-        for k in self.K:
-            for c in self.C:
-                most_visits = eval(self.continuity.loc[c, "MostVisits"])
-                continuity[k, c] = 1 if k in most_visits else 0
-        return continuity
+        # Initialize dictionaries for real routes and arrivals
+        real_routes = {k: [] for k in self.K}
+        real_arrivals = {k: {} for k in self.K}
+
+        # Extract unique caregivers from tasks with PlannedCaregiverID
+        if "PlannedCaregiverID" not in self.tasks.columns:
+            return real_routes, real_arrivals
+
+        # Get caregivers that have assigned tasks
+        assigned_caregivers = set(self.tasks["PlannedCaregiverID"].dropna()).intersection(set(self.K))
+
+        # Process each caregiver's route
+        for k in assigned_caregivers:
+            # Get all tasks for this caregiver sorted by start time
+            caregiver_tasks = self.tasks[self.tasks["PlannedCaregiverID"] == k].sort_values("start_minutes")
+
+            if caregiver_tasks.empty:
+                continue
+
+            # Set start and end times
+            first_task = caregiver_tasks.iloc[0].name
+            last_task = caregiver_tasks.iloc[-1].name
+
+            # Calculate start and end times
+            real_arrivals[k]["start"] = self.e[first_task] - self.c(k, "start", first_task)
+            real_arrivals[k]["end"] = self.l[last_task] + self.c(k, last_task, "end")
+
+            # Build the route
+            prev_task = "start"
+            for idx, task in caregiver_tasks.iterrows():
+                # Add this leg of the route (prev_task -> current_task)
+                real_routes[k].append((prev_task, idx))
+
+                # Record arrival time (use the planned start time)
+                real_arrivals[k][idx] = task["start_minutes"]
+
+                # Update previous task
+                prev_task = idx
+
+            # Add the final leg back to end
+            real_routes[k].append((prev_task, "end"))
+
+        return real_routes, real_arrivals
+
+    def is_historically_visited(self, k, c):
+        """
+        Check if caregiver k has historically visited client c.
+        """
+        most_visits = eval(self.continuity.loc[c, "MostVisits"])
+        return 1 if k in most_visits else 0
 
     def c(self, k, i, j):
         """
@@ -95,53 +140,54 @@ class BaseModel(ABC):
             return 0 if end_at_home else time_matrix.loc[self.get_location(i), 0]
         return time_matrix.loc[self.get_location(i), self.get_location(j)]
 
-    def __determine_pair_feasibility(self):
+    def is_pair_feasible(self, k, i, j):
         """
-        Determine infeasible task pairs based on time constraints.
+        Check if a pair of tasks is feasible based on time constraints.
         """
-        pair_feasibility = {}
-        for k in self.K:
-            for i in self.V:
-                for j in self.V:
-                    if j < i:
-                        first, last = (i, j) if self.e[i] < self.e[j] else (j, i)
-                        pair_feasibility[k, first, last] = self.e[last] >= self.l[first] + self.c(k, first, last)
-        return pair_feasibility
+        if i == j:
+            return False
 
-    def __determine_client_tasks(self):
-        """
-        Determine which tasks are associated with each client.
-        """
-        client_tasks = {}
-        for c in self.C:
-            client_tasks[c] = self.tasks[self.tasks["ClientID"] == c].index.tolist()
-        return client_tasks
+        # Determine which task comes first in time
+        if self.e[i] < self.e[j]:
+            first, last = i, j
+        else:
+            first, last = j, i
 
-    def __determine_qualified_tasks(self):
-        """
-        Determine which tasks each caregiver is qualified to perform.
-        """
-        caregiver_tasks = {}
-        for k in self.K:
-            caregiver_attributes = self.caregivers.loc[k, "Attributes"]
-            qualified_clients = self.clients[
-                self.clients["Requirements"].apply(lambda req: np.dot(req, caregiver_attributes) == 0)
-            ].index.tolist()
+        # Check if there's enough time between the tasks
+        return self.e[last] >= self.l[first] + self.c(k, first, last)
 
-            # Filter tasks to only include those with qualified clients
-            caregiver_tasks[k] = self.tasks[self.tasks["ClientID"].isin(qualified_clients)].index.tolist()
-
-        return caregiver_tasks
-
-    def determine_feasible_breaks(self, break_length):
+    def get_client_tasks(self, c):
         """
-        Determine feasible breaks for each caregiver based on their schedule.
+        Get tasks associated with client c.
         """
-        breaks = {}
-        for k, i, j in self.A:
-            if self.A[k, i, j]:
-                breaks[k, i, j] = self.e[j] - self.l[i] - self.c(k, i, j) >= break_length
-        return breaks
+        return self.tasks[self.tasks["ClientID"] == c].index.tolist()
+
+    def is_caregiver_qualified(self, k, task_id):
+        """
+        Check if caregiver k is qualified to perform task_id.
+        """
+        caregiver_attributes = self.caregivers.loc[k, "Attributes"]
+        client_id = self.get_location(task_id)
+        client_requirements = self.clients.loc[client_id, "Requirements"]
+
+        # Check if the caregiver meets all requirements (dot product is 0)
+        return np.dot(client_requirements, caregiver_attributes) == 0
+
+    def is_break_feasible(self, k, i, j, break_length):
+        """
+        Check if a break is feasible between tasks i and j for caregiver k.
+        """
+        if i == j:
+            return False
+
+        # Determine which task comes first in time
+        if self.e[i] < self.e[j]:
+            first, last = i, j
+        else:
+            first, last = j, i
+
+        # Check if there's enough time for a break between the tasks
+        return self.e[last] - self.l[first] - self.c(k, first, last) >= break_length
 
     # Model building
     @abstractmethod
