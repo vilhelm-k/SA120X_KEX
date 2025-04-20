@@ -330,7 +330,7 @@ def display_metrics_summary(model):
     return None
 
 
-def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10)):
+def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(8.27, 11.69)):
     """
     Create visualizations of the metrics from the model solution.
 
@@ -341,7 +341,7 @@ def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10
         - 'individual': Only display the individual figures
         - 'all': Display both dashboard and individual figures
         - 'none': Don't display any figures, just return them
-    - dashboard_figsize: Size of the dashboard figure
+    - dashboard_figsize: Size of the dashboard figure, default is A4 portrait size (8.27 x 11.69 inches)
 
     Returns:
     - If display_mode is 'dashboard': The dashboard figure
@@ -646,14 +646,34 @@ def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10
         ax7.set_ylim(0, max_caregivers + 1)
         ax7.set_yticks(np.arange(0, max_caregivers + 1))
 
-    # Create the dashboard figure
+    # Create the dashboard figure - Using A4 dimensions with margins
     dashboard_fig = plt.figure(figsize=dashboard_figsize)
-    gs = gridspec.GridSpec(2, 3, figure=dashboard_fig)
+    # Create a 3x2 grid (3 rows, 2 columns) for the dashboard with tighter spacing
+    gs = gridspec.GridSpec(
+        3,
+        2,
+        figure=dashboard_fig,
+        wspace=0.15,  # Reduce width spacing between columns
+        hspace=0.3,  # Maintain reasonable height spacing
+        left=0.08,  # Reduce left margin
+        right=0.92,  # Extend right margin
+        bottom=0.08,  # Reduce bottom margin
+        top=0.92,
+    )  # Extend top margin
 
     # We'll create the plots directly on the dashboard figure
     # Handle the case where there's only one active caregiver
     x_positions = index  # Same positions as used for individual charts
 
+    # Define smaller font sizes for dashboard
+    title_fontsize = 10
+    label_fontsize = 8
+    tick_fontsize = 7
+    legend_fontsize = 7
+    annotation_fontsize = 7
+    x_axis_label_small = 5  # Even smaller font size for specific x-axis labels
+
+    # ROW 1: Time allocation charts
     # 1. Time allocation bar chart (top left)
     dash_ax1 = dashboard_fig.add_subplot(gs[0, 0])
     dash_ax1.bar(x_positions, service_times, label="Service", color="skyblue")
@@ -663,73 +683,93 @@ def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10
 
     # Ensure tick positions and labels match exactly
     dash_ax1.set_xticks(x_positions)
-    dash_ax1.set_xticklabels(caregiver_labels, rotation=45, ha="right")
-    dash_ax1.set_xlabel("Caregiver")
-    dash_ax1.set_ylabel("Time (minutes)")
-    dash_ax1.set_title("Time Allocation by Caregiver")
-    dash_ax1.legend()
+    dash_ax1.set_xticklabels(caregiver_labels, rotation=45, ha="right", fontsize=x_axis_label_small)
+    dash_ax1.set_xlabel("Caregiver", fontsize=x_axis_label_small)
+    dash_ax1.set_ylabel("Time (minutes)", fontsize=label_fontsize)
+    dash_ax1.set_title("Time Allocation by Caregiver", fontsize=title_fontsize)
+    dash_ax1.tick_params(axis="y", labelsize=tick_fontsize)
+    dash_ax1.legend(fontsize=legend_fontsize)
 
-    # 2. Overall time allocation pie chart (top middle)
+    # 2. Overall time allocation pie chart (top right)
     dash_ax2 = dashboard_fig.add_subplot(gs[0, 1])
-    dash_ax2.pie(sizes, labels=labels, colors=colors, autopct="%1.1f%%", startangle=90)
+    wedges, texts, autotexts = dash_ax2.pie(sizes, labels=labels, colors=colors, autopct="%1.1f%%", startangle=90)
     dash_ax2.axis("equal")
-    dash_ax2.set_title("Overall Time Allocation")
+    dash_ax2.set_title("Overall Time Allocation", fontsize=title_fontsize)
 
-    # 3. Historical visits pie chart (top right)
-    dash_ax3 = dashboard_fig.add_subplot(gs[0, 2])
-    dash_ax3.pie(hist_sizes, labels=hist_labels, colors=hist_colors, autopct="%1.1f%%", startangle=90)
-    dash_ax3.axis("equal")
-    dash_ax3.set_title("Historical vs. Non-Historical Visits")
+    # Make pie chart text smaller
+    for text in texts:
+        text.set_fontsize(tick_fontsize)
+    for autotext in autotexts:
+        autotext.set_fontsize(tick_fontsize)
 
-    # 4. Utilization chart (bottom left)
-    dash_ax4 = dashboard_fig.add_subplot(gs[1, 0])
-    dash_ax4.bar(x_positions, utilizations, color="skyblue")
+    # ROW 2: Utilization and Temporal violations
+    # 3. Utilization chart (middle left)
+    dash_ax3 = dashboard_fig.add_subplot(gs[1, 0])
+    dash_ax3.bar(x_positions, utilizations, color="skyblue")
 
     # Ensure tick positions and labels match exactly
-    dash_ax4.set_xticks(x_positions)
-    dash_ax4.set_xticklabels(caregiver_labels, rotation=45, ha="right")
-    dash_ax4.axhline(y=avg_util, linestyle="--", color="red", label=f"Avg: {avg_util:.1f}%")
-    dash_ax4.set_xlabel("Caregiver")
-    dash_ax4.set_ylabel("Utilization (%)")
-    dash_ax4.set_title("Caregiver Utilization")
-    dash_ax4.set_ylim(0, 100)
-    dash_ax4.legend()
+    dash_ax3.set_xticks(x_positions)
+    dash_ax3.set_xticklabels(caregiver_labels, rotation=45, ha="right", fontsize=x_axis_label_small)
+    dash_ax3.axhline(y=avg_util, linestyle="--", color="red", label=f"Avg: {avg_util:.1f}%")
+    dash_ax3.set_xlabel("Caregiver", fontsize=x_axis_label_small)
+    dash_ax3.set_ylabel("Utilization (%)", fontsize=label_fontsize)
+    dash_ax3.set_title("Caregiver Utilization", fontsize=title_fontsize)
+    dash_ax3.tick_params(axis="y", labelsize=tick_fontsize)
+    dash_ax3.set_ylim(0, 100)
+    dash_ax3.legend(fontsize=legend_fontsize)
 
-    # 5. Temporal violations chart (bottom middle)
-    dash_ax5 = dashboard_fig.add_subplot(gs[1, 1])
+    # 4. Temporal violations chart (middle right)
+    dash_ax4 = dashboard_fig.add_subplot(gs[1, 1])
 
     # Plot violation minutes with bars
-    dash_ax5.bar(x_positions, violation_minutes, color="firebrick", alpha=0.9, width=0.6)
+    dash_ax4.bar(x_positions, violation_minutes, color="firebrick", alpha=0.9, width=0.6)
 
     # Set labels and ticks
-    dash_ax5.set_xticks(x_positions)
-    dash_ax5.set_xticklabels(caregiver_labels, rotation=45, ha="right")
-    dash_ax5.set_xlabel("Caregiver")
-    dash_ax5.set_ylabel("Violation Minutes")
-    dash_ax5.set_title("Temporal Violations")
+    dash_ax4.set_xticks(x_positions)
+    dash_ax4.set_xticklabels(caregiver_labels, rotation=45, ha="right", fontsize=x_axis_label_small)
+    dash_ax4.set_xlabel("Caregiver", fontsize=x_axis_label_small)
+    dash_ax4.set_ylabel("Violation Minutes", fontsize=label_fontsize)
+    dash_ax4.set_title("Temporal Violations", fontsize=title_fontsize)
+    dash_ax4.tick_params(axis="y", labelsize=tick_fontsize)
 
     # Add grid
-    dash_ax5.grid(True, axis="y", linestyle="--", alpha=0.7)
+    dash_ax4.grid(True, axis="y", linestyle="--", alpha=0.7)
 
     # Add average line
-    dash_ax5.axhline(
+    dash_ax4.axhline(
         y=avg_violation_minutes, linestyle="--", color="darkred", label=f"Avg: {avg_violation_minutes:.1f} min"
     )
-    dash_ax5.legend()
+    dash_ax4.legend(fontsize=legend_fontsize)
 
     # Annotate the total violations
-    dash_ax5.text(
+    dash_ax4.text(
         0.5,
         0.95,
         f"Total: {aggregate_metrics['total']['violation_count']} violations, {aggregate_metrics['total']['violation_minutes']:.1f} minutes",
         ha="center",
         va="top",
-        transform=dash_ax5.transAxes,
+        transform=dash_ax4.transAxes,
         bbox=dict(facecolor="white", alpha=0.8, edgecolor="darkred"),
+        fontsize=annotation_fontsize,
     )
 
+    # ROW 3: Continuity metrics
+    # 5. Historical visits pie chart (bottom left)
+    dash_ax5 = dashboard_fig.add_subplot(gs[2, 0])
+    wedges2, texts2, autotexts2 = dash_ax5.pie(
+        hist_sizes, labels=hist_labels, colors=hist_colors, autopct="%1.1f%%", startangle=90
+    )
+    dash_ax5.axis("equal")
+    dash_ax5.set_title("Historical vs. Non-Historical Visits", fontsize=title_fontsize)
+
+    # Make pie chart text smaller
+    for text in texts2:
+        text.set_fontsize(tick_fontsize)
+    for autotext in autotexts2:
+        autotext.set_fontsize(tick_fontsize)
+
     # 6. Client visits and caregivers chart (bottom right)
-    dash_ax6 = dashboard_fig.add_subplot(gs[1, 2])
+    dash_ax6 = dashboard_fig.add_subplot(gs[2, 1])
 
     # Get visit groups data for violin plot
     client_continuity = continuity_metrics["client_continuity"]
@@ -752,10 +792,10 @@ def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10
             "No client visit data available",
             ha="center",
             va="center",
-            fontsize=14,
+            fontsize=annotation_fontsize,
             transform=dash_ax6.transAxes,
         )
-        dash_ax6.set_title("Caregivers per Client by Visit Count")
+        dash_ax6.set_title("Caregivers per Client by Visit Count", fontsize=title_fontsize)
     else:
         # Create positions for x-axis
         positions = np.arange(len(visit_counts))
@@ -764,7 +804,7 @@ def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10
         for i, caregivers in enumerate(caregiver_counts):
             x = np.ones_like(caregivers) * i
             jitter = np.random.normal(0, 0.04, size=len(caregivers))
-            dash_ax6.scatter(x + jitter, caregivers, color="blue", alpha=0.5, s=40)
+            dash_ax6.scatter(x + jitter, caregivers, color="blue", alpha=0.5, s=20)  # Smaller point size (s=20)
 
         # Only create violin plots if we have enough data
         valid_violin_data = []
@@ -785,10 +825,11 @@ def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10
 
         # Set axis labels and ticks
         dash_ax6.set_xticks(positions)
-        dash_ax6.set_xticklabels([f"{vc}" for vc in visit_counts])
-        dash_ax6.set_xlabel("Visits per Client")
-        dash_ax6.set_ylabel("Caregivers")
-        dash_ax6.set_title("Caregivers per Client by Visit Count")
+        dash_ax6.set_xticklabels([f"{vc}" for vc in visit_counts], fontsize=tick_fontsize)
+        dash_ax6.set_xlabel("Visits per Client", fontsize=label_fontsize)
+        dash_ax6.set_ylabel("Caregivers", fontsize=label_fontsize)
+        dash_ax6.set_title("Caregivers per Client by Visit Count", fontsize=title_fontsize)
+        dash_ax6.tick_params(axis="y", labelsize=tick_fontsize)
 
         # Add grid and set y-axis limits
         dash_ax6.grid(True, linestyle="--", alpha=0.7)
@@ -796,7 +837,11 @@ def visualize_metrics(model, display_mode="dashboard", dashboard_figsize=(20, 10
         dash_ax6.set_ylim(0, max_caregivers + 1)
         dash_ax6.set_yticks(np.arange(0, max_caregivers + 1))
 
-    plt.tight_layout()
+    # Add a title to the dashboard
+    dashboard_fig.suptitle("Home Care Schedule Metrics", fontsize=12, y=0.98)
+
+    # Remove tight_layout as we've manually set the spacing parameters
+    # plt.tight_layout()
 
     # Handle display based on display_mode
     individual_figs = [fig1, fig2, fig3, fig4, fig6, fig7]

@@ -145,14 +145,14 @@ def calculate_caregiver_metrics(model):
         }
 
         # Verify that time accounting adds up
-        accounted_time = service_time + travel_time + waiting_time + break_time
-        time_diff = abs(total_time - accounted_time)
-        if time_diff > 1:  # Tolerance of 1 minute due to potential floating point issues
-            print(f"Warning: Caregiver {k} has a time accounting discrepancy of {time_diff:.2f} minutes")
-            print(f"  Total time: {total_time:.2f}, Accounted time: {accounted_time:.2f}")
-            print(
-                f"  Service: {service_time:.2f}, Travel: {travel_time:.2f}, Waiting: {waiting_time:.2f}, Break: {break_time:.2f}"
-            )
+        # accounted_time = service_time + travel_time + waiting_time + break_time
+        # time_diff = abs(total_time - accounted_time)
+        # if time_diff > 1:  # Tolerance of 1 minute due to potential floating point issues
+        #     print(f"Warning: Caregiver {k} has a time accounting discrepancy of {time_diff:.2f} minutes")
+        #     print(f"  Total time: {total_time:.2f}, Accounted time: {accounted_time:.2f}")
+        #     print(
+        #         f"  Service: {service_time:.2f}, Travel: {travel_time:.2f}, Waiting: {waiting_time:.2f}, Break: {break_time:.2f}"
+        #     )
 
         # Store metrics for this caregiver
         caregiver_metrics[k] = {

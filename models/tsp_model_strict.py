@@ -3,7 +3,7 @@ from gurobipy import GRB
 from .base_model import BaseModel
 
 
-class TSPModel(BaseModel):
+class TSPModelStrict(BaseModel):
     def build(
         self,
         overtime_penalty=0.8,
@@ -40,11 +40,7 @@ class TSPModel(BaseModel):
                 for j in self.V:
                     if i != j:
                         self.x[k, i, j] = self.model.addVar(vtype=GRB.BINARY, name=f"x^{k}_{i}_{j}")
-                        self.w[k, i, j] = (
-                            self.l[j]
-                            - self.l[i]
-                            - lateness_penalty * (min(0, self.e[j] - self.l[i] - self.c(k, i, j)))
-                        )
+                        self.w[k, i, j] = self.l[j] - self.l[i]
 
             # Caregiver usage
             self.is_used[k] = self.model.addVar(vtype=GRB.BINARY, name=f"is_used_{k}")
@@ -93,6 +89,20 @@ class TSPModel(BaseModel):
                 gp.quicksum(unqualified_visits) == 0,
                 name="Qualification",
             )
+
+        # Temporal feasibility constraint
+        # If arrival time window is infeasible (e[j] - l[i] - travel_time < 0), force x[k,i,j] to be 0
+        infeasible_arcs = []
+        for k in self.K:
+            for i in self.V:
+                for j in self.V:
+                    if i != j:
+                        # Check if it's temporally infeasible to go from i to j
+                        if self.e[j] - self.l[i] - self.c(k, i, j) < 0:
+                            infeasible_arcs.append(self.x[k, i, j])
+
+        if infeasible_arcs:
+            self.model.addConstr(gp.quicksum(infeasible_arcs) == 0, name="TemporalFeasibility")
 
         # Define total time for each caregiver
         for k in self.K:
