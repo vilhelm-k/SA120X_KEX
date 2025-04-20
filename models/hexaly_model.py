@@ -11,6 +11,7 @@ class HexalyModel(BaseModel):
         regular_hours=8 * 60,
         break_length=30,
         continuity_penalty=5,
+        lateness_penalty=5,
     ):
         with hexaly.optimizer.HexalyOptimizer() as optimizer:
             # ---- Base Model Construction ----
@@ -27,13 +28,12 @@ class HexalyModel(BaseModel):
             self.model.constraint(self.model.partition(task_sequences))
 
             service_time = self.model.array([self.s[i] for i in self.V])
-            earliest = self.model.array([self.e[i] - 15 for i in self.V])
-            latest = self.model.array([self.l[i] + 15 for i in self.V])
+            earliest = self.model.array([self.e[i] for i in self.V])
+            latest = self.model.array([self.l[i] for i in self.V])
             dist_matrix = self.model.array([[[self.c(k, i, j) for j in self.V] for i in self.V] for k in self.K])
             dist_start = self.model.array([[self.c(k, "start", i) for i in self.V] for k in self.K])
             dist_end = self.model.array([[self.c(k, i, "end") for i in self.V] for k in self.K])
 
-            start_time = [self.model.float(0, max(self.e.values())) for _ in range(K_num)]
             end_time = [None] * K_num
             lateness = [None] * K_num
             tour_duration = [None] * K_num
@@ -47,7 +47,6 @@ class HexalyModel(BaseModel):
                 # Forbidding unallowed stops
                 for i, task in enumerate(self.V):
                     if not self.is_caregiver_qualified(caregiver, task):
-                        print(f"Caregiver {caregiver} cannot do task {task}")
                         self.model.constraint(self.model.not_(self.model.contains(sequence, i)))
 
                 # End time of each visit
@@ -56,8 +55,8 @@ class HexalyModel(BaseModel):
                         earliest[sequence[i]],
                         self.model.iif(
                             i == 0,
-                            dist_start[k][sequence[0]] + start_time[k],
-                            prev + self.model.at(dist_matrix[k], sequence[i - 1], sequence[i]),
+                            earliest[sequence[i]],
+                            prev + self.model.at(dist_matrix, k, sequence[i - 1], sequence[i]),
                         ),
                     )
                     + service_time[sequence[i]],
@@ -73,41 +72,40 @@ class HexalyModel(BaseModel):
                 # Tour duration. First term is the home arrival
                 tour_duration[k] = self.model.iif(
                     c > 0,
-                    end_time[k][c - 1] + dist_end[k][sequence[c - 1]] - start_time[k],
+                    end_time[k][c - 1] + dist_end[k][sequence[c - 1]] - dist_start[k][sequence[0]],
                     0,
                 )
 
             total_lateness = self.model.sum(lateness)
             total_tour_duration = self.model.sum(tour_duration)
 
-            self.model.minimize(total_tour_duration)
-            self.model.minimize(total_lateness)
+            self.model.minimize(lateness_penalty * total_lateness + total_tour_duration)
 
             self.model.close()
-            optimizer.param.time_limit = 60
+            optimizer.param.time_limit = 10
             optimizer.solve()
 
             ### Solution extraction
 
             self.routes = {k: [] for k in self.K}
             self.arrivals = {k: [] for k in self.K}
-            for k, k in enumerate(self.K):
-                if not caregivers_used[k]:
+            for k, caregiver in enumerate(self.K):
+                if not caregivers_used[k].value:
                     continue
 
                 sequence_value = task_sequences[k].value
+                c = len(sequence_value)
 
                 # Routes
-                self.routes[k].append(("start", self.V[sequence_value[0]]))
+                self.routes[caregiver].append(("start", self.V[sequence_value[0]]))
                 for i in range(len(sequence_value) - 1):
-                    self.routes[k].append((self.V[sequence_value[i]], self.V[sequence_value[i + 1]]))
-                self.routes[k].append((self.V[sequence_value[-1]], "end"))
+                    self.routes[caregiver].append((self.V[sequence_value[i]], self.V[sequence_value[i + 1]]))
+                self.routes[caregiver].append((self.V[c - 1], "end"))
 
                 # Arrivals
-                self.arrivals[k] = {}
-                self.arrivals[k]["start"] = start_time[k].value
-                self.arrivals[k]["end"] = self.arrivals[k]["start"] + tour_duration[k].value
-                for i in range(len(sequence_value)):
-                    self.arrivals[k][self.V[sequence_value[i]]] = (
-                        end_time[k][i].value - self.s[self.V[sequence_value[i]]]
-                    )
+                end_time_value = end_time[k].value
+                self.arrivals[caregiver] = {}
+                self.arrivals[caregiver]["start"] = end_time_value[0] - self.s[self.V[sequence_value[0]]]
+                self.arrivals[caregiver]["end"] = self.arrivals[caregiver]["start"] + tour_duration[k].value
+                for idx, i in enumerate(sequence_value):
+                    self.arrivals[caregiver][self.V[i]] = end_time_value[idx] - self.s[self.V[i]]

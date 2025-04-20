@@ -312,8 +312,6 @@ class BaseModel(ABC):
         """
         if self.model is None:
             raise ValueError("Model must be optimized before extracting the solution")
-        if self.model.Status != GRB.OPTIMAL:
-            print(f"Model not optimally solved. Status: {self.model.Status}")
         self._extract_routes()
         self._extract_arrival_times()
         if hasattr(self, "B"):
