@@ -156,11 +156,22 @@ class BaseModel(ABC):
         # Check if there's enough time between the tasks
         return self.e[last] >= self.l[first] + self.c(k, first, last)
 
-    def get_client_tasks(self, c):
+    def get_client_tasks(self, c, index=False):
         """
         Get tasks associated with client c.
+
+        Args:
+            c: Client ID
+            index: If True, return row positions in the dataframe. If False, return task indices.
+
+        Returns:
+            List of task IDs or positions in the dataframe
         """
-        return self.tasks[self.tasks["ClientID"] == c].index.tolist()
+        mask = self.tasks["ClientID"] == c
+        if index:
+            return [i for i, m in enumerate(mask) if m]
+        else:
+            return self.tasks[mask].index.tolist()
 
     def is_caregiver_qualified(self, k, task_id):
         """
