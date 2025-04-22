@@ -60,6 +60,19 @@ class BaseModel(ABC):
         # Save actual routes and arrival times from PlannedCaregiverID
         self.real_routes, self.real_arrivals = self.__extract_real_routes_and_arrivals()
 
+    def get_max_travel_time(self):
+        """
+        Get the maximum travel time for all caregivers and tasks.
+        This is used to set the time limit for the optimization model.
+        """
+        return (
+            max(
+                self.drive_time_matrix.max().max(),
+                self.walk_time_matrix.max().max(),
+                self.bicycle_time_matrix.max().max(),
+            ),
+        )
+
     def __extract_real_routes_and_arrivals(self):
         """
         Extract the real routes and arrival times based on the PlannedCaregiverID in tasks

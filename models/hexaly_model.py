@@ -16,6 +16,7 @@ class HexalyModel(BaseModel):
         break_penalty=100,
         distance_cost=2,
         time_limit=60 * 8,
+        wiggle_room=30,
     ):
         with hexaly.optimizer.HexalyOptimizer() as optimizer:
             # ---- Base Model Construction ----
@@ -26,15 +27,21 @@ class HexalyModel(BaseModel):
             K_num = len(self.K)
             C_num = len(self.C)
 
+            max_travel = self.get_max_travel_time()
+            earliest_start = int(min(self.e.values()) - wiggle_room - max_travel)
+            latest_start = int(max(self.e.values()) + wiggle_room)
+            latest_end = int(max(self.l.values()) + wiggle_room + max_travel)
+
             # ---- Model Variables ----
             task_sequences = [model.list(V_num) for _ in range(K_num)]
             model.constraint(model.partition(task_sequences))
+            start_times = [model.int(earliest_start, latest_start) for _ in range(K_num)]
 
             # ---- Model Parameters ----
             # Visit parameters
             service_time = model.array([self.s[i] for i in self.V])
-            earliest = model.array([max(self.e[i] - 30, 450) for i in self.V])
-            latest = model.array([self.l[i] + 30 for i in self.V])
+            earliest = model.array([max(self.e[i] - wiggle_room, 450) for i in self.V])
+            latest = model.array([self.l[i] + wiggle_room for i in self.V])
 
             # Distances
             dist_matrix = model.array([[[self.c(k, i, j) for j in self.V] for i in self.V] for k in self.K])
@@ -60,6 +67,7 @@ class HexalyModel(BaseModel):
             for k, caregiver in enumerate(self.K):
                 sequence = task_sequences[k]
                 c = model.count(sequence)
+                start = start_times[k]
 
                 forbidden = []
                 # Forbidding unallowed stops
@@ -75,7 +83,7 @@ class HexalyModel(BaseModel):
                         earliest[sequence[i]],
                         model.iif(
                             i == 0,
-                            earliest[sequence[i]],
+                            start + dist_start[k][sequence[0]],
                             prev + model.at(dist_matrix, k, sequence[i - 1], sequence[i]),
                         ),
                     )
@@ -99,9 +107,7 @@ class HexalyModel(BaseModel):
                     c > 0,
                     model.max(
                         min_tour_duration,
-                        end_time[k][c - 1]
-                        + dist_end[k][sequence[c - 1]]
-                        - (end_time[k][0] - dist_start[k][sequence[0]]),
+                        end_time[k][c - 1] + dist_end[k][sequence[c - 1]] - start,
                     ),
                     0,
                 )
@@ -136,7 +142,6 @@ class HexalyModel(BaseModel):
                 + total_continuity_penalty
                 + distance_cost * total_distance
             )
-            model.minimize(total_distance)
 
             model.close()
             optimizer.param.time_limit = time_limit
