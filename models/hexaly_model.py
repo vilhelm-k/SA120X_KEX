@@ -6,7 +6,7 @@ class HexalyModel(BaseModel):
     def build(
         self,
         overtime_penalty=2,
-        caregiver_penalty=100,
+        min_tour_duration=60 * 3,
         worktime_per_break=5 * 60,
         regular_hours=8 * 60,
         break_length=30,
@@ -14,6 +14,8 @@ class HexalyModel(BaseModel):
         day_continuity_penalty=10,
         lateness_penalty=5,
         break_penalty=100,
+        distance_cost=2,
+        time_limit=60 * 8,
     ):
         with hexaly.optimizer.HexalyOptimizer() as optimizer:
             # ---- Base Model Construction ----
@@ -31,8 +33,8 @@ class HexalyModel(BaseModel):
             # ---- Model Parameters ----
             # Visit parameters
             service_time = model.array([self.s[i] for i in self.V])
-            earliest = model.array([self.e[i] - 15 for i in self.V])
-            latest = model.array([self.l[i] + 15 for i in self.V])
+            earliest = model.array([max(self.e[i] - 30, 450) for i in self.V])
+            latest = model.array([self.l[i] + 30 for i in self.V])
 
             # Distances
             dist_matrix = model.array([[[self.c(k, i, j) for j in self.V] for i in self.V] for k in self.K])
@@ -48,6 +50,7 @@ class HexalyModel(BaseModel):
 
             end_time = [None] * K_num
             lateness = [None] * K_num
+            dist_routes = [None] * K_num
             tour_duration = [None] * K_num
             overtime = [None] * K_num
             continuity_penalty = [None] * K_num
@@ -83,10 +86,22 @@ class HexalyModel(BaseModel):
                 late_lambda = model.lambda_function(lambda i: model.max(0, end_time[k][i] - latest[sequence[i]]))
                 lateness[k] = model.sum(model.range(0, c), late_lambda)
 
+                # Distance driven
+                dist_lambda = model.lambda_function(lambda i: model.at(dist_matrix, k, sequence[i - 1], sequence[i]))
+
+                dist_routes[k] = model.sum(model.range(1, c), dist_lambda) + model.iif(
+                    c > 0, dist_start[k][sequence[0]] + dist_end[k][sequence[c - 1]], 0
+                )
+
                 # Tour duration. First term is the home arrival
                 tour_duration[k] = model.iif(
                     c > 0,
-                    end_time[k][c - 1] + dist_end[k][sequence[c - 1]] - (end_time[k][0] - dist_start[k][sequence[0]]),
+                    model.max(
+                        min_tour_duration,
+                        end_time[k][c - 1]
+                        + dist_end[k][sequence[c - 1]]
+                        - (end_time[k][0] - dist_start[k][sequence[0]]),
+                    ),
                     0,
                 )
 
@@ -110,19 +125,20 @@ class HexalyModel(BaseModel):
             total_lateness = model.sum(lateness)
             total_tour_duration = model.sum(tour_duration)
             total_overtime = model.sum(overtime)
-            total_caregivers_used = model.sum(caregivers_used)
             total_continuity_penalty = model.sum(continuity_penalty)
+            total_distance = model.sum(dist_routes)
 
             model.minimize(total_lateness)
             model.minimize(
                 total_tour_duration
                 + overtime_penalty * total_overtime
-                + caregiver_penalty * total_caregivers_used
                 + total_continuity_penalty
+                + distance_cost * total_distance
             )
+            model.minimize(total_distance)
 
             model.close()
-            optimizer.param.time_limit = 60 * 8
+            optimizer.param.time_limit = time_limit
             optimizer.solve()
 
             # ---- Solution Extraction ----
