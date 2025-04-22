@@ -66,7 +66,8 @@ class HexalyModel(BaseModel):
                 for i, task in enumerate(self.V):
                     if not self.is_caregiver_qualified(caregiver, task):
                         forbidden.append(task)
-                model.constraint(model.count(model.intersection(sequence, model.array(forbidden))) == 0)
+                if forbidden:
+                    model.constraint(model.count(model.intersection(sequence, model.array(forbidden))) == 0)
 
                 # End time of each visit
                 end_time_lambda = model.lambda_function(
