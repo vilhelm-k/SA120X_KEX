@@ -149,7 +149,7 @@ class HexalyModel(BaseModel):
 
             # ---- Solution Extraction ----
             self.routes = {k: [] for k in self.K}
-            self.arrivals = {k: [] for k in self.K}
+            self.arrivals = {k: {} for k in self.K}
             for k, caregiver in enumerate(self.K):
                 if not caregivers_used[k].value:
                     continue
@@ -158,14 +158,9 @@ class HexalyModel(BaseModel):
                 end_time_value = end_time[k].value
 
                 c = len(sequence_value)
-                self.arrivals[caregiver] = {}
 
                 self.routes[caregiver].append(("start", self.V[sequence_value[0]]))
-                self.arrivals[caregiver]["start"] = (
-                    end_time_value[0]
-                    - self.s[self.V[sequence_value[0]]]
-                    - self.c(caregiver, "start", self.V[sequence_value[0]])
-                )
+                self.arrivals[caregiver]["start"] = start_times[k].value
 
                 for i in range(c):
                     source = self.V[sequence_value[i]]
@@ -174,10 +169,9 @@ class HexalyModel(BaseModel):
                         destination = self.V[sequence_value[i + 1]]
                         self.routes[caregiver].append((source, destination))
 
-                self.routes[caregiver].append((self.V[sequence_value[c - 1]], "end"))
-                self.arrivals[caregiver]["end"] = end_time_value[c - 1] + self.c(
-                    caregiver, self.V[sequence_value[c - 1]], "end"
-                )
+                end_idx = sequence_value[c - 1]
+                self.routes[caregiver].append((self.V[end_idx], "end"))
+                self.arrivals[caregiver]["end"] = end_time_value[c - 1] + self.c(caregiver, self.V[end_idx], "end")
 
     def get_solution(self):
         return self.routes, self.arrivals
