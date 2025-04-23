@@ -80,40 +80,30 @@ class HexalyModel(BaseModel):
                     m.constraint(m.count(m.intersection(sequence, m.array(forbidden))) == 0)
 
                 # End time of each visit
-                location_lambda = m.lambda_function(lambda i, prev: m.iif(sequence[i] < V_num, sequence[i], prev))
-                locations[k] = m.array(m.range(0, c), location_lambda, -1)
-
-                distance_lambda = m.lambda_function(
-                    lambda i: m.iif(
-                        locations[k][i] < V_num,
-                        m.iif(
-                            i > 0,
-                            m.iif(
-                                locations[k][i - 1] == -1,
-                                dist_start[k][locations[k][i]],
-                                m.at(dist_matrix, k, locations[k][i - 1], locations[k][i]),
-                            ),
-                            dist_start[k][locations[k][i]],
-                        ),
-                        0,
-                    )
-                )
-                distances[k] = m.array(m.range(0, c), distance_lambda)
-
                 end_time_lambda = m.lambda_function(
-                    lambda i, prev: m.iif(
-                        sequence[i] < V_num,
-                        m.max(earliest[sequence[i]], prev + distances[k][i]) + service_time[sequence[i]],
-                        prev + break_length,  # Break node,
+                    lambda i, prev: m.max(
+                        earliest[sequence[i]],
+                        m.iif(
+                            i == 0,
+                            start + dist_start[k][sequence[0]],
+                            prev + m.at(dist_matrix, k, sequence[i - 1], sequence[i]),
+                        ),
                     )
+                    + service_time[sequence[i]],
                 )
-                end_time[k] = m.array(m.range(0, c), end_time_lambda, start)
+
+                end_time[k] = m.array(m.range(0, c), end_time_lambda, 0)
+
                 # Lateness
                 late_lambda = m.lambda_function(lambda i: m.max(0, end_time[k][i] - latest[sequence[i]]))
                 lateness[k] = m.sum(m.range(0, c), late_lambda)
 
                 # Distance driven
-                dist_routes[k] = m.sum(distances[k]) + m.iif(c > 0, dist_end[k][sequence[c - 1]], 0)
+                dist_lambda = m.lambda_function(lambda i: m.at(dist_matrix, k, sequence[i - 1], sequence[i]))
+
+                dist_routes[k] = m.sum(m.range(1, c), dist_lambda) + m.iif(
+                    c > 0, dist_start[k][sequence[0]] + dist_end[k][sequence[c - 1]], 0
+                )
 
                 # Tour duration. First term is the home arrival
                 tour_duration[k] = m.iif(
