@@ -16,6 +16,7 @@ class HexalyBreakModel(BaseModel):
         distance_cost=2,
         time_limit=60 * 8,
         wiggle_room=30,
+        evening_shift=17 * 60,
     ):
         with hexaly.optimizer.HexalyOptimizer() as optimizer:
             # ---- Base Model Construction ----
@@ -85,19 +86,16 @@ class HexalyBreakModel(BaseModel):
                 if forbidden:
                     m.constraint(m.count(m.intersection(sequence, m.array(forbidden))) == 0)
 
-                location_lambda = m.lambda_function(lambda i, prev: m.iif(sequence[i] < V_num, sequence[i], prev))
-                locations[k] = m.array(m.range(0, c), location_lambda, -1)
-
                 distance_lambda = m.lambda_function(
                     lambda i: m.iif(
-                        locations[k][i] < V_num,
+                        sequence[i] < V_num,
                         m.iif(
                             i == 0,
-                            dist_start[k][locations[k][i]],
+                            dist_start[k][sequence[i]],
                             m.iif(
-                                locations[k][i - 1] == -1,
-                                dist_start[k][locations[k][i]],
-                                m.at(dist_matrix, k, locations[k][i - 1], locations[k][i]),
+                                sequence[i - 1] < V_num,
+                                m.at(dist_matrix, k, sequence[i - 1], sequence[i]),
+                                m.at(dist_matrix, k, sequence[i - 2], sequence[i]),
                             ),
                         ),
                         0,
@@ -109,10 +107,12 @@ class HexalyBreakModel(BaseModel):
                     lambda i, prev: m.iif(
                         sequence[i] < V_num,
                         m.max(earliest[sequence[i]], prev + distances[k][i]) + service_time[sequence[i]],
-                        prev + break_length,  # Break node,
+                        prev + break_length,
                     )
                 )
+
                 end_time[k] = m.array(m.range(0, c), end_time_lambda, start)
+
                 # Lateness
                 late_lambda = m.lambda_function(
                     lambda i: m.iif(
@@ -124,10 +124,11 @@ class HexalyBreakModel(BaseModel):
                 lateness[k] = m.sum(m.range(0, c), late_lambda)
 
                 # Distance driven
-                dist_routes[k] = m.sum(distances[k]) + m.iif(c > 0, dist_end[k][locations[k][c - 1]], 0)
+                dist_lambda = m.lambda_function(lambda i: distances[k][i])
+                dist_routes[k] = m.sum(m.range(0, c), dist_lambda) + m.iif(c > 0, dist_end[k][sequence[c - 1]], 0)
 
                 # Tour duration. First term is the home arrival
-                home_time[k] = m.iif(c > 0, end_time[k][c - 1] + dist_end[k][locations[k][c - 1]], start)
+                home_time[k] = m.iif(c > 0, end_time[k][c - 1] + dist_end[k][sequence[c - 1]], start)
                 tour_duration[k] = m.iif(
                     c > 0,
                     m.max(
