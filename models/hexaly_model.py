@@ -42,7 +42,7 @@ class HexalyModel(BaseModel):
             m.constraint(m.partition(task_sequences))
             start_times = [m.int(earliest_start, latest_start) for _ in range(K_num)]
             used_breaks = [m.int(0, max_breaks) for _ in range(K_num)]
-            caregiver_breaks = [[m.int(0, latest_start) for _ in range(max_breaks)] for _ in range(K_num)]
+            caregiver_breaks = [[m.int(1, V_num) for _ in range(max_breaks)] for _ in range(K_num)]
 
             # ---- Model Parameters ----
             # Visit parameters
@@ -90,29 +90,24 @@ class HexalyModel(BaseModel):
                     m.constraint(m.count(m.intersection(sequence, m.array(forbidden))) == 0)
 
                 # End time of each visit
-                def end_time_function(i, prev):
-                    end_time_no_break = (
-                        m.max(
-                            earliest[sequence[i]],
-                            m.iif(
-                                i == 0,
-                                start + dist_start[k][sequence[0]],
-                                prev + m.at(dist_matrix, k, sequence[i - 1], sequence[i]),
+                end_time_lambda = m.lambda_function(
+                    lambda i, prev: m.max(
+                        earliest[sequence[i]],
+                        m.iif(
+                            i == 0,
+                            start + dist_start[k][sequence[0]],
+                            prev
+                            + m.at(dist_matrix, k, sequence[i - 1], sequence[i])
+                            + m.sum(
+                                m.range(0, used_breaks[k]),
+                                m.lambda_function(lambda j: m.iif(breaks_array[j] == i, break_length, 0)),
                             ),
-                        )
-                        + service_time[sequence[i]]
+                        ),
                     )
-                    end_time_break = end_time_no_break
-                    for j in range(max_breaks):
-                        b = breaks[j]
-                        end_time_break += m.iif(
-                            m.and_(j < used_breaks[k], b > prev, b <= end_time_break),
-                            break_length,
-                            0,
-                        )
-                    return end_time_break
+                    + service_time[sequence[i]],
+                )
 
-                end_time[k] = m.array(m.range(0, c), m.lambda_function(end_time_function), start)
+                end_time[k] = m.array(m.range(0, c), end_time_lambda, start)
 
                 # Lateness
                 late_lambda = m.lambda_function(lambda i: m.max(0, end_time[k][i] - latest[sequence[i]]))
@@ -139,14 +134,22 @@ class HexalyModel(BaseModel):
                 required_breaks[k] = m.iif(
                     start < evening_shift_start, m.floor(tour_duration[k] / worktime_per_break), 0
                 )
-                missed_breaks[k] = m.max(0, required_breaks[k] - used_breaks[k])
+                # missed_breaks[k] = m.max(0, required_breaks[k] - used_breaks[k])
+                m.constraint(used_breaks[k] >= required_breaks[k])
+                m.constraint(m.and_(m.range(0, used_breaks[k]), m.lambda_function(lambda i: breaks_array[i] < c - 1)))
                 break_violation_lambda = m.lambda_function(
                     lambda i: m.iif(
                         i < used_breaks[k] - 1,
-                        m.max(0, breaks_array[i - 1] + break_length + between_break_time - breaks_array[i]),
                         m.max(
                             0,
-                            breaks_array[i]
+                            end_time[k][breaks_array[i - 1]]
+                            + break_length
+                            + between_break_time
+                            - end_time[k][breaks_array[i]],
+                        ),
+                        m.max(
+                            0,
+                            end_time[k][breaks_array[i]]
                             + break_length
                             + break_boundary_time
                             - (end_time[k][c - 1] + dist_end[k][sequence[c - 1]]),
@@ -155,7 +158,7 @@ class HexalyModel(BaseModel):
                 )
                 break_violation[k] = m.iif(
                     used_breaks[k] > 0,
-                    m.max(0, start - breaks[0] + break_boundary_time)
+                    m.max(0, start - end_time[k][breaks_array[0]] + break_boundary_time)
                     + m.sum(m.range(0, used_breaks[k]), break_violation_lambda),
                     0,
                 )
@@ -183,10 +186,10 @@ class HexalyModel(BaseModel):
             total_continuity_penalty = m.sum(continuity_penalty)
             total_distance = m.sum(dist_routes)
             total_break_violation = m.sum(break_violation)
-            total_missed_breaks = m.sum(missed_breaks)
+            # total_missed_breaks = m.sum(missed_breaks)
 
             m.minimize(total_lateness)
-            m.minimize(total_missed_breaks)
+            # m.minimize(total_missed_breaks)
             m.minimize(total_break_violation)
             m.minimize(
                 total_tour_duration
