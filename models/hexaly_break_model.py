@@ -11,14 +11,11 @@ class HexalyBreakModel(BaseModel):
         regular_hours=8 * 60,
         break_length=40,
         continuity_penalty=60,
-        worktime_per_break=5 * 60,
+        worktime_per_break=60 * 6,
         day_continuity_penalty=10,
         distance_cost=2,
         time_limit=60 * 8,
         wiggle_room=30,
-        break_boundary_time=60 * 2,
-        longest_tour=60 * 10,
-        break_violation_penalty=2,
     ):
         with hexaly.optimizer.HexalyOptimizer() as optimizer:
             # ---- Base Model Construction ----
@@ -32,14 +29,17 @@ class HexalyBreakModel(BaseModel):
             max_travel = self.get_max_travel_time()
             earliest_start = math.floor(min(self.e.values()) - wiggle_room - max_travel)
             latest_start = math.ceil(max(self.e.values()) + wiggle_room)
-            earliest_break = 10 * 60 + 30
-            latest_break = 16 * 60
+            total_service_time = sum(self.s.values())
+            max_breaks = math.ceil(1.5 * total_service_time / worktime_per_break)  # Should be enough breaks
 
             # ---- Model Variables ----
-            task_sequences = [m.list(V_num) for _ in range(K_num)]
+            task_sequences = [m.list(V_num + max_breaks) for _ in range(K_num + 1)]
             m.constraint(m.partition(task_sequences))
             start_times = [m.int(earliest_start, latest_start) for _ in range(K_num)]
-            caregiver_breaks = [m.int(1, V_num) for _ in range(K_num)]
+
+            # Fictive caregiver can't visit any real clients
+            for i in range(V_num):
+                m.constraint(m.contains(task_sequences[K_num], i) == False)
 
             # ---- Model Parameters ----
             # Visit parameters
@@ -66,8 +66,9 @@ class HexalyBreakModel(BaseModel):
             tour_duration = [None] * K_num
             overtime = [None] * K_num
             continuity_penalty = [None] * K_num
-            has_no_break = [None] * K_num
-            break_violation = [None] * K_num
+            locations = [None] * K_num
+            distances = [None] * K_num
+            route_exhaustion = [None] * K_num
 
             caregivers_used = [(m.count(task_sequences[k]) > 0) for k in range(K_num)]
 
@@ -75,7 +76,6 @@ class HexalyBreakModel(BaseModel):
                 sequence = task_sequences[k]
                 c = m.count(sequence)
                 start = start_times[k]
-                b = caregiver_breaks[k]
 
                 forbidden = []
                 # Forbidding unallowed stops
@@ -85,38 +85,49 @@ class HexalyBreakModel(BaseModel):
                 if forbidden:
                     m.constraint(m.count(m.intersection(sequence, m.array(forbidden))) == 0)
 
-                # End time of each visit
-                def end_time_function(i, prev):
-                    arrival_no_break = m.max(
-                        earliest[sequence[i]],
+                location_lambda = m.lambda_function(lambda i, prev: m.iif(sequence[i] < V_num, sequence[i], prev))
+                locations[k] = m.array(m.range(0, c), location_lambda, -1)
+
+                distance_lambda = m.lambda_function(
+                    lambda i: m.iif(
+                        locations[k][i] < V_num,
                         m.iif(
                             i == 0,
-                            start + dist_start[k][sequence[0]],
-                            prev + m.at(dist_matrix, k, sequence[i - 1], sequence[i]),
+                            dist_start[k][locations[k][i]],
+                            m.iif(
+                                locations[k][i - 1] == -1,
+                                dist_start[k][locations[k][i]],
+                                m.at(dist_matrix, k, locations[k][i - 1], locations[k][i]),
+                            ),
                         ),
+                        0,
                     )
-                    end_time_no_break = arrival_no_break + service_time[sequence[i]]
-                    return m.iif(
-                        m.and_(b >= prev, b < end_time_no_break),
-                        m.max(arrival_no_break, b + break_length) + service_time[sequence[i]],
-                        end_time_no_break,
+                )
+                distances[k] = m.array(m.range(0, c), distance_lambda)
+
+                end_time_lambda = m.lambda_function(
+                    lambda i, prev: m.iif(
+                        sequence[i] < V_num,
+                        m.max(earliest[sequence[i]], prev + distances[k][i]) + service_time[sequence[i]],
+                        prev + break_length,  # Break node,
                     )
-
-                end_time[k] = m.array(m.range(0, c), m.lambda_function(end_time_function), start)
-
+                )
+                end_time[k] = m.array(m.range(0, c), end_time_lambda, start)
                 # Lateness
-                late_lambda = m.lambda_function(lambda i: m.max(0, end_time[k][i] - latest[sequence[i]]))
+                late_lambda = m.lambda_function(
+                    lambda i: m.iif(
+                        sequence[i] < V_num,
+                        m.max(0, end_time[k][i] - latest[sequence[i]]),
+                        0,  # Break node, no lateness
+                    )
+                )
                 lateness[k] = m.sum(m.range(0, c), late_lambda)
 
                 # Distance driven
-                dist_lambda = m.lambda_function(lambda i: m.at(dist_matrix, k, sequence[i - 1], sequence[i]))
-
-                dist_routes[k] = m.sum(m.range(1, c), dist_lambda) + m.iif(
-                    c > 0, dist_start[k][sequence[0]] + dist_end[k][sequence[c - 1]], 0
-                )
+                dist_routes[k] = m.sum(distances[k]) + m.iif(c > 0, dist_end[k][locations[k][c - 1]], 0)
 
                 # Tour duration. First term is the home arrival
-                home_time[k] = m.iif(c > 0, end_time[k][c - 1] + dist_end[k][sequence[c - 1]], start)
+                home_time[k] = m.iif(c > 0, end_time[k][c - 1] + dist_end[k][locations[k][c - 1]], start)
                 tour_duration[k] = m.iif(
                     c > 0,
                     m.max(
@@ -125,20 +136,19 @@ class HexalyBreakModel(BaseModel):
                     ),
                     0,
                 )
-                m.constraint(tour_duration[k] <= longest_tour)
 
                 # Breaks
-                has_no_break[k] = m.or_(
-                    c == 0,
-                    m.floor(tour_duration[k] / worktime_per_break) == 0,
-                    start >= latest_break,
-                    home_time[k] <= earliest_break,
+                route_exhaustion_lambda = m.lambda_function(
+                    lambda i, prev: m.iif(
+                        sequence[i] < V_num,
+                        m.iif(i == 0, end_time[k][0] - start, prev + end_time[k][i] - end_time[k][i - 1]),
+                        0,
+                    )
                 )
-                break_violation[k] = m.iif(
-                    has_no_break[k],
-                    0,
-                    m.max(0, b + break_boundary_time - home_time[k]) + m.max(0, start + break_boundary_time - b),
-                )
+                route_exhaustion[k] = m.array(m.range(0, c), route_exhaustion_lambda, 0)
+
+                exhaustion_lambda = m.lambda_function(lambda i: route_exhaustion[k][i] <= worktime_per_break)
+                m.constraint(m.and_(m.range(0, c), exhaustion_lambda))
 
                 # Overtime
                 overtime[k] = m.iif(
@@ -162,10 +172,8 @@ class HexalyBreakModel(BaseModel):
             total_overtime = m.sum(overtime)
             total_continuity_penalty = m.sum(continuity_penalty)
             total_distance = m.sum(dist_routes)
-            total_break_violation = m.sum(break_violation)
 
             m.minimize(total_lateness)
-            m.minimize(total_break_violation)
             m.minimize(
                 total_tour_duration
                 + overtime_penalty * total_overtime
@@ -186,26 +194,34 @@ class HexalyBreakModel(BaseModel):
 
                 sequence_value = task_sequences[k].value
                 end_time_value = end_time[k].value
+                real_sequence = []
+                for idx, i in enumerate(sequence_value):
+                    if i < V_num:
+                        real_sequence.append(i)
+                    else:
+                        self.breaks[caregiver].append(self.V[real_sequence[-1]])
 
-                c = len(sequence_value)
+                c = len(real_sequence)
 
-                self.routes[caregiver].append(("start", self.V[sequence_value[0]]))
+                self.routes[caregiver].append(("start", self.V[real_sequence[0]]))
                 self.arrivals[caregiver]["start"] = start_times[k].value
 
                 for i in range(c):
-                    source = self.V[sequence_value[i]]
-                    self.arrivals[caregiver][source] = end_time_value[i] - self.s[source]
+                    source = self.V[real_sequence[i]]
+                    for idx, j in enumerate(sequence_value):
+                        if j == real_sequence[i]:
+                            break
+                    self.arrivals[caregiver][source] = end_time_value[idx] - self.s[source]
                     if i < c - 1:
-                        destination = self.V[sequence_value[i + 1]]
+                        destination = self.V[real_sequence[i + 1]]
                         self.routes[caregiver].append((source, destination))
 
-                end_idx = sequence_value[c - 1]
+                end_idx = real_sequence[c - 1]
                 self.routes[caregiver].append((self.V[end_idx], "end"))
-                self.arrivals[caregiver]["end"] = end_time_value[c - 1] + self.c(caregiver, self.V[end_idx], "end")
-
-                # # Breaks
-                # real_breaks = [b for b in caregiver_breaks[k].value if b in sequence_value]
-                # self.breaks[caregiver] = [self.V[b] for b in real_breaks]
+                for idx, j in enumerate(sequence_value):
+                    if j == end_idx:
+                        break
+                self.arrivals[caregiver]["end"] = end_time_value[idx] + self.c(caregiver, self.V[end_idx], "end")
 
     def get_solution(self):
         return self.routes, self.arrivals, self.breaks
