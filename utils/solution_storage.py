@@ -120,7 +120,7 @@ def save_solution(model, name=None, format="json"):
             "saved_at": timestamp,
             "name": name,
             "objective_value": model.model.objVal if hasattr(model.model, "objVal") else None,
-            "model_status": model.model.Status,
+            "model_status": model.model.Status if hasattr(model.model, "Status") else None,
         },
         "routes": {},
         "arrivals": {},

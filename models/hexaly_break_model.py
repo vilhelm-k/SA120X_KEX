@@ -6,16 +6,16 @@ import math
 class HexalyBreakModel(BaseModel):
     def build(
         self,
-        overtime_penalty=2,
+        overtime_penalty=1.5,
         min_tour_duration=60 * 3,
         regular_hours=8 * 60,
         break_length=40,
         continuity_penalty=60,
-        worktime_per_break=60 * 6,
+        worktime_per_break=60 * 5,
         day_continuity_penalty=10,
         distance_cost=2,
         time_limit=60 * 8,
-        wiggle_room=30,
+        wiggle_room=60,
         evening_shift=17 * 60,
     ):
         with hexaly.optimizer.HexalyOptimizer() as optimizer:
